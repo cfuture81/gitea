@@ -22,20 +22,21 @@ var supportedTypes = map[packages_model.Type]bool{
 }
 
 type upstreamResponse struct {
-	ID           int64  `json:"id"`
-	OwnerID      int64  `json:"owner_id"`
-	Type         string `json:"type"`
-	Name         string `json:"name"`
-	URL          string `json:"url"`
-	Mode         string `json:"mode"`
-	AuthType     string `json:"auth_type"`
-	AuthUsername string `json:"auth_username"`
-	MetadataTTL  int64  `json:"metadata_ttl"`
-	Enabled      bool   `json:"enabled"`
-	FetchCount   int64  `json:"fetch_count"`
-	HitCount     int64  `json:"hit_count"`
-	Created      int64  `json:"created"`
-	Updated      int64  `json:"updated"`
+	ID           int64                         `json:"id"`
+	OwnerID      int64                         `json:"owner_id"`
+	Type         string                        `json:"type"`
+	Name         string                        `json:"name"`
+	URL          string                        `json:"url"`
+	Mode         string                        `json:"mode"`
+	AuthType     string                        `json:"auth_type"`
+	AuthUsername string                        `json:"auth_username"`
+	MetadataTTL  int64                         `json:"metadata_ttl"`
+	Enabled      bool                          `json:"enabled"`
+	FetchCount   int64                         `json:"fetch_count"`
+	HitCount     int64                         `json:"hit_count"`
+	PinnedTags   []*packages_model.UpstreamPin `json:"pinned_tags"`
+	Created      int64                         `json:"created"`
+	Updated      int64                         `json:"updated"`
 }
 
 func toResponse(u *packages_model.PackageRegistryUpstream) *upstreamResponse {
@@ -52,21 +53,23 @@ func toResponse(u *packages_model.PackageRegistryUpstream) *upstreamResponse {
 		Enabled:      u.Enabled,
 		FetchCount:   u.FetchCount,
 		HitCount:     u.HitCount,
+		PinnedTags:   u.PinnedTags,
 		Created:      int64(u.CreatedUnix),
 		Updated:      int64(u.UpdatedUnix),
 	}
 }
 
 type upstreamRequest struct {
-	Type         string `json:"type"`
-	Name         string `json:"name"`
-	URL          string `json:"url"`
-	Mode         string `json:"mode"`
-	AuthType     string `json:"auth_type"`
-	AuthUsername string `json:"auth_username"`
-	AuthSecret   string `json:"auth_secret"`
-	MetadataTTL  int64  `json:"metadata_ttl"`
-	Enabled      *bool  `json:"enabled"`
+	Type         string                        `json:"type"`
+	Name         string                        `json:"name"`
+	URL          string                        `json:"url"`
+	Mode         string                        `json:"mode"`
+	AuthType     string                        `json:"auth_type"`
+	AuthUsername string                        `json:"auth_username"`
+	AuthSecret   string                        `json:"auth_secret"`
+	MetadataTTL  int64                         `json:"metadata_ttl"`
+	Enabled      *bool                         `json:"enabled"`
+	PinnedTags   []*packages_model.UpstreamPin `json:"pinned_tags"`
 }
 
 func apiError(ctx *context.Context, status int, msg string) {
@@ -143,6 +146,7 @@ func Create(ctx *context.Context) {
 		AuthSecret:   req.AuthSecret,
 		MetadataTTL:  ttl,
 		Enabled:      enabled,
+		PinnedTags:   req.PinnedTags,
 	}
 	if _, err := packages_model.InsertUpstream(ctx, u); err != nil {
 		apiError(ctx, http.StatusInternalServerError, err.Error())
@@ -224,6 +228,9 @@ func Update(ctx *context.Context) {
 	}
 	if req.Enabled != nil {
 		u.Enabled = *req.Enabled
+	}
+	if req.PinnedTags != nil {
+		u.PinnedTags = req.PinnedTags
 	}
 
 	if err := packages_model.UpdateUpstream(ctx, u); err != nil {

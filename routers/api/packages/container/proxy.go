@@ -107,8 +107,14 @@ func proxyEnsureManifest(ctx *context.Context, up *packages_model.PackageRegistr
 		return true
 	}
 
+	upstreamRef := reference
+	if t := up.ResolvePin(image, reference); t != "" {
+		upstreamRef = t
+		log.Info("container proxy: pin %s:%s -> upstream %q", image, reference, t)
+	}
+
 	c := newUpstreamClient(up)
-	if !c.fetchAndStoreManifest(ctx, image, reference) {
+	if !c.fetchAndStoreManifest(ctx, image, upstreamRef, reference) {
 		return false
 	}
 
@@ -272,9 +278,9 @@ func parseBearerChallenge(h string) (realm, service, scope string) {
 	return realm, service, scope
 }
 
-func (c *upstreamClient) fetchAndStoreManifest(ctx *context.Context, image, reference string) bool {
+func (c *upstreamClient) fetchAndStoreManifest(ctx *context.Context, image, upstreamRef, storeRef string) bool {
 	scope := "repository:" + image + ":pull"
-	urlStr := c.base + "/v2/" + image + "/manifests/" + reference
+	urlStr := c.base + "/v2/" + image + "/manifests/" + upstreamRef
 	resp, err := c.get(ctx, urlStr, manifestAcceptHeader, scope)
 	if err != nil {
 		log.Error("container proxy: manifest request failed: %v", err)
@@ -282,7 +288,7 @@ func (c *upstreamClient) fetchAndStoreManifest(ctx *context.Context, image, refe
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		log.Warn("container proxy: upstream manifest %s:%s status %d", image, reference, resp.StatusCode)
+		log.Warn("container proxy: upstream manifest %s:%s status %d", image, upstreamRef, resp.StatusCode)
 		return false
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxManifestSize))
@@ -308,11 +314,12 @@ func (c *upstreamClient) fetchAndStoreManifest(ctx *context.Context, image, refe
 			return false
 		}
 		for _, m := range index.Manifests {
-			if !c.fetchAndStoreManifest(ctx, image, m.Digest.String()) {
+			d := m.Digest.String()
+			if !c.fetchAndStoreManifest(ctx, image, d, d) {
 				return false
 			}
 		}
-		return c.storeManifest(ctx, image, reference, mediaType, body)
+		return c.storeManifest(ctx, image, storeRef, mediaType, body)
 	case container_module.IsMediaTypeImageManifest(mediaType):
 		var m oci.Manifest
 		if err := json.Unmarshal(body, &m); err != nil {
@@ -327,9 +334,9 @@ func (c *upstreamClient) fetchAndStoreManifest(ctx *context.Context, image, refe
 				return false
 			}
 		}
-		return c.storeManifest(ctx, image, reference, mediaType, body)
+		return c.storeManifest(ctx, image, storeRef, mediaType, body)
 	default:
-		log.Warn("container proxy: unsupported manifest media type %q for %s:%s", mediaType, image, reference)
+		log.Warn("container proxy: unsupported manifest media type %q for %s:%s", mediaType, image, upstreamRef)
 		return false
 	}
 }

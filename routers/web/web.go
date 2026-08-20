@@ -696,6 +696,12 @@ func registerWebRoutes(m *web.Router, webAuth *AuthMiddleware) {
 		m.Post("/keys/delete", user_setting.DeleteKey)
 		m.Group("/packages", func() {
 			m.Get("", user_setting.Packages)
+			m.Group("/upstreams", func() {
+				m.Get("", user_setting.UpstreamProxies)
+				m.Post("", user_setting.UpstreamProxiesPost)
+				m.Post("/{id}", user_setting.UpstreamProxiesEditPost)
+				m.Post("/{id}/delete", user_setting.UpstreamProxiesDelete)
+			})
 			m.Group("/rules", func() {
 				m.Group("/add", func() {
 					m.Get("", user_setting.PackagesRuleAdd)

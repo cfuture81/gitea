@@ -1,0 +1,127 @@
+{{template "user/settings/layout_head" (dict "pageClass" "user settings packages")}}
+	<div class="user-setting-content">
+		<h4 class="ui top attached header">
+			Registry upstream proxies
+		</h4>
+		<div class="ui attached segment">
+			{{if not .EnableUpstreamProxy}}
+				<div class="ui warning message">
+					The upstream proxy feature is disabled. Set <code>[packages] ENABLE_UPSTREAM_PROXY = true</code> in app.ini to activate it.
+				</div>
+			{{end}}
+			<p>
+				Pull-through caches a remote registry on a miss; <strong>frozen</strong> serves only what is already cached and never contacts the upstream.
+				Use <strong>pinned tags</strong> to alias a mutable tag (e.g. <code>latest</code>) to a fixed version, so clients keep pulling <code>latest</code> but receive the pinned version (container only).
+			</p>
+			{{if .Upstreams}}
+			<table class="ui table">
+				<thead>
+					<tr>
+						<th>Type</th><th>Name</th><th>Upstream URL</th><th>Mode</th><th>Enabled</th>
+						<th>Fetches</th><th>Hits</th><th>Pins</th><th></th>
+					</tr>
+				</thead>
+				<tbody>
+					{{range .Upstreams}}
+					<tr>
+						<td>{{.Type}}</td>
+						<td>{{.Name}}</td>
+						<td><code>{{.URL}}</code></td>
+						<td>{{if eq (printf "%s" .Mode) "frozen"}}<span class="ui red label">frozen</span>{{else}}<span class="ui green label">pull_through</span>{{end}}</td>
+						<td>{{if .Enabled}}yes{{else}}no{{end}}</td>
+						<td>{{.FetchCount}}</td>
+						<td>{{.HitCount}}</td>
+						<td>{{len .PinnedTags}}</td>
+						<td class="right aligned">
+							<a class="ui tiny button" href="{{$.UpstreamsLink}}?id={{.ID}}">Edit</a>
+							<form class="tw-inline-block" action="{{$.UpstreamsLink}}/{{.ID}}/delete" method="post" onsubmit="return confirm('Delete this upstream?')">
+								<button class="ui tiny red button">Delete</button>
+							</form>
+						</td>
+					</tr>
+					{{if .PinnedTags}}
+					<tr>
+						<td></td>
+						<td colspan="8">
+							{{range .PinnedTags}}<span class="ui label">{{.Image}}:{{.Tag}} &rarr; {{.Target}}</span> {{end}}
+						</td>
+					</tr>
+					{{end}}
+					{{end}}
+				</tbody>
+			</table>
+			{{else}}
+				<p><em>No upstreams configured yet.</em></p>
+			{{end}}
+		</div>
+
+		{{$e := .EditUpstream}}
+		<h4 class="ui top attached header">
+			{{if $e}}Edit upstream #{{$e.ID}}{{else}}Add upstream{{end}}
+		</h4>
+		<div class="ui attached segment">
+			<form class="ui form" method="post" action="{{if $e}}{{.UpstreamsLink}}/{{$e.ID}}{{else}}{{.UpstreamsLink}}{{end}}">
+				<div class="two fields">
+					<div class="field">
+						<label>Type</label>
+						<select name="type" {{if $e}}disabled{{end}}>
+							<option value="maven" {{if and $e (eq (printf "%s" $e.Type) "maven")}}selected{{end}}>maven</option>
+							<option value="container" {{if and $e (eq (printf "%s" $e.Type) "container")}}selected{{end}}>container</option>
+						</select>
+						{{if $e}}<input type="hidden" name="type" value="{{$e.Type}}">{{end}}
+					</div>
+					<div class="field">
+						<label>Name</label>
+						<input name="name" value="{{if $e}}{{$e.Name}}{{end}}" placeholder="e.g. central / dockerhub" required>
+					</div>
+				</div>
+				<div class="field">
+					<label>Upstream URL</label>
+					<input name="url" value="{{if $e}}{{$e.URL}}{{end}}" placeholder="https://repo1.maven.org/maven2/ or https://registry-1.docker.io" required>
+				</div>
+				<div class="two fields">
+					<div class="field">
+						<label>Mode</label>
+						<select name="mode">
+							<option value="pull_through" {{if and $e (eq (printf "%s" $e.Mode) "pull_through")}}selected{{end}}>pull_through</option>
+							<option value="frozen" {{if and $e (eq (printf "%s" $e.Mode) "frozen")}}selected{{end}}>frozen</option>
+						</select>
+					</div>
+					<div class="field">
+						<label>Metadata TTL (seconds)</label>
+						<input name="metadata_ttl" type="number" value="{{if $e}}{{$e.MetadataTTL}}{{else}}900{{end}}">
+					</div>
+				</div>
+				<div class="three fields">
+					<div class="field">
+						<label>Auth type</label>
+						<select name="auth_type">
+							<option value="none" {{if and $e (eq (printf "%s" $e.AuthType) "none")}}selected{{end}}>none</option>
+							<option value="basic" {{if and $e (eq (printf "%s" $e.AuthType) "basic")}}selected{{end}}>basic</option>
+							<option value="token" {{if and $e (eq (printf "%s" $e.AuthType) "token")}}selected{{end}}>token</option>
+						</select>
+					</div>
+					<div class="field">
+						<label>Auth username</label>
+						<input name="auth_username" value="{{if $e}}{{$e.AuthUsername}}{{end}}">
+					</div>
+					<div class="field">
+						<label>Auth secret {{if $e}}(leave blank to keep){{end}}</label>
+						<input name="auth_secret" type="password" autocomplete="new-password">
+					</div>
+				</div>
+				<div class="field">
+					<label class="gt-checkbox">
+						<input type="checkbox" name="enabled" value="true" {{if or (not $e) $e.Enabled}}checked{{end}}> Enabled
+					</label>
+				</div>
+				<div class="field">
+					<label>Pinned tags (JSON array; container only)</label>
+					<textarea name="pinned_tags" rows="4" placeholder='[{"image":"library/mongo","tag":"latest","target":"4.4"}]'>{{if .EditPinnedTagsJSON}}{{.EditPinnedTagsJSON}}{{end}}</textarea>
+				</div>
+				<button class="ui primary button">{{if $e}}Save changes{{else}}Add upstream{{end}}</button>
+				{{if $e}}<a class="ui button" href="{{.UpstreamsLink}}">Cancel</a>{{end}}
+			</form>
+		</div>
+	</div>
+{{template "user/settings/layout_footer" .}}

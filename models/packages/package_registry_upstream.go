@@ -5,6 +5,7 @@ package packages
 
 import (
 	"context"
+	"strings"
 
 	"gitea.dev/models/db"
 	"gitea.dev/modules/timeutil"
@@ -45,6 +46,15 @@ func (a UpstreamAuthType) IsValid() bool {
 	return a == UpstreamAuthNone || a == UpstreamAuthBasic || a == UpstreamAuthToken
 }
 
+// UpstreamPin aliases a mutable tag to a fixed upstream reference for one image, so internal
+// clients keep requesting the mutable tag (e.g. "latest") but are served the pinned version's
+// content. This is the "freeze a specific version" control (container MVP).
+type UpstreamPin struct {
+	Image  string `json:"image"`  // e.g. "library/mongo" or "noenv/mongo"
+	Tag    string `json:"tag"`    // tag the client requests, e.g. "latest"
+	Target string `json:"target"` // upstream reference actually fetched, e.g. "4.4.29"
+}
+
 // PackageRegistryUpstream describes a remote registry that an owner's package registry can
 // proxy / cache for a given package Type. Shared across formats (maven first, then container, ...).
 type PackageRegistryUpstream struct {
@@ -67,6 +77,9 @@ type PackageRegistryUpstream struct {
 	// Observability: FetchCount = upstream fetches, HitCount = served from local cache.
 	FetchCount int64 `xorm:"NOT NULL DEFAULT 0"`
 	HitCount   int64 `xorm:"NOT NULL DEFAULT 0"`
+
+	// PinnedTags aliases mutable tags to fixed upstream references (see UpstreamPin). JSON column.
+	PinnedTags []*UpstreamPin `xorm:"JSON TEXT"`
 
 	CreatedUnix timeutil.TimeStamp `xorm:"created NOT NULL DEFAULT 0"`
 	UpdatedUnix timeutil.TimeStamp `xorm:"updated NOT NULL DEFAULT 0"`
@@ -130,4 +143,18 @@ func IncrUpstreamFetchCount(ctx context.Context, id int64) error {
 func IncrUpstreamHitCount(ctx context.Context, id int64) error {
 	_, err := db.GetEngine(ctx).ID(id).Incr("hit_count").Update(new(PackageRegistryUpstream))
 	return err
+}
+
+// ResolvePin returns the target upstream reference for (image, requestedTag) if a pin exists for
+// this upstream, or "" when none matches. Comparison is case-insensitive.
+func (u *PackageRegistryUpstream) ResolvePin(image, tag string) string {
+	for _, p := range u.PinnedTags {
+		if p == nil {
+			continue
+		}
+		if strings.EqualFold(p.Image, image) && strings.EqualFold(p.Tag, tag) {
+			return p.Target
+		}
+	}
+	return ""
 }

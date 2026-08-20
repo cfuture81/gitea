@@ -423,6 +423,7 @@ func prepareMigrationTasks() []*migration {
 		newMigration(347, "Add watch options", v28.AddWatchOptions),
 		newMigration(348, "Recreate email_hash table for SHA256 avatar hashes", v28.RecreateEmailHashTable),
 		newMigration(349, "Add package registry upstream table", v28.AddPackageRegistryUpstream),
+		newMigration(350, "Add pinned_tags column to package registry upstream", v28.AddPinnedTagsToPackageRegistryUpstream),
 	}
 	return preparedMigrations
 }
