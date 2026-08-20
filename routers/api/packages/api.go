@@ -33,6 +33,7 @@ import (
 	"gitea.dev/routers/api/packages/rubygems"
 	"gitea.dev/routers/api/packages/swift"
 	"gitea.dev/routers/api/packages/terraform"
+	"gitea.dev/routers/api/packages/upstream"
 	"gitea.dev/routers/api/packages/vagrant"
 	"gitea.dev/services/auth"
 	"gitea.dev/services/context"
@@ -91,6 +92,15 @@ func reqPackageAccess(accessMode perm.AccessMode) func(ctx *context.Context) {
 	}
 }
 
+// reqUpstreamProxyEnabled gates the pull-through / freeze proxy management API behind the
+// ENABLE_UPSTREAM_PROXY setting (default off).
+func reqUpstreamProxyEnabled(ctx *context.Context) {
+	if !setting.Packages.EnableUpstreamProxy {
+		ctx.HTTPError(http.StatusNotFound)
+		return
+	}
+}
+
 type verifyAuthOptions struct {
 	afterAuthCallback func(ctx *context.Context, err error)
 }
@@ -130,6 +140,17 @@ func CommonRoutes() *web.Router {
 	}, verifyAuthOptions{})
 
 	r.Group("/{username}", func() {
+		// Management API for pull-through / freeze proxy upstreams (feature-flagged).
+		// All endpoints require package write access (owner/admin) — config, not content.
+		r.Group("/-/upstreams", func() {
+			r.Get("", upstream.List)
+			r.Post("", upstream.Create)
+			r.Group("/{id}", func() {
+				r.Get("", upstream.Get)
+				r.Patch("", upstream.Update)
+				r.Delete("", upstream.Delete)
+			})
+		}, reqUpstreamProxyEnabled, reqPackageAccess(perm.AccessModeWrite))
 		r.Group("/alpine", func() {
 			r.Get("/key", alpine.GetRepositoryKey)
 			r.Group("/{branch}/{repository}", func() {

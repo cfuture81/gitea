@@ -148,17 +148,36 @@ func serveMavenMetadata(ctx *context.Context, params parameters) {
 }
 
 func servePackageFile(ctx *context.Context, params parameters, serveContent bool) {
+	up := getEnabledMavenUpstream(ctx)
+
+	// Serve from local (cached) storage if present.
+	if servePackageFileLocal(ctx, params, serveContent, up) {
+		return
+	}
+
+	// Local miss: pull-through proxy (frozen mode never fetches), then retry the local serve once.
+	if proxyFetchAndStore(ctx, params, up) && servePackageFileLocal(ctx, params, serveContent, nil) {
+		return
+	}
+
+	apiError(ctx, http.StatusNotFound, packages_model.ErrPackageFileNotExist)
+}
+
+// servePackageFileLocal serves a file from local (cached) storage. It returns true when it has
+// written a response (served content/checksum, or a hard 5xx error), and false only when the
+// version or file does not exist locally (no response written) so the caller may proxy-fetch.
+// When up is non-nil and a file is actually served, the upstream hit counter is incremented.
+func servePackageFileLocal(ctx *context.Context, params parameters, serveContent bool, up *packages_model.PackageRegistryUpstream) bool {
 	pv, err := packages_model.GetVersionByNameAndVersion(ctx, ctx.Package.Owner.ID, packages_model.TypeMaven, params.toInternalPackageName(), params.Version)
 	if errors.Is(err, util.ErrNotExist) {
 		pv, err = packages_model.GetVersionByNameAndVersion(ctx, ctx.Package.Owner.ID, packages_model.TypeMaven, params.toInternalPackageNameLegacy(), params.Version)
 	}
 	if err != nil {
 		if errors.Is(err, packages_model.ErrPackageNotExist) {
-			apiError(ctx, http.StatusNotFound, err)
-		} else {
-			apiError(ctx, http.StatusInternalServerError, err)
+			return false
 		}
-		return
+		apiError(ctx, http.StatusInternalServerError, err)
+		return true
 	}
 
 	filename := params.Filename
@@ -171,17 +190,16 @@ func servePackageFile(ctx *context.Context, params parameters, serveContent bool
 	pf, err := packages_model.GetFileForVersionByName(ctx, pv.ID, filename, packages_model.EmptyFileKey)
 	if err != nil {
 		if errors.Is(err, packages_model.ErrPackageFileNotExist) {
-			apiError(ctx, http.StatusNotFound, err)
-		} else {
-			apiError(ctx, http.StatusInternalServerError, err)
+			return false
 		}
-		return
+		apiError(ctx, http.StatusInternalServerError, err)
+		return true
 	}
 
 	pb, err := packages_model.GetBlobByID(ctx, pf.BlobID)
 	if err != nil {
 		apiError(ctx, http.StatusInternalServerError, err)
-		return
+		return true
 	}
 
 	if isChecksumExtension(ext) {
@@ -196,8 +214,9 @@ func servePackageFile(ctx *context.Context, params parameters, serveContent bool
 		case extensionSHA512:
 			hash = pb.HashSHA512
 		}
+		countUpstreamHit(ctx, up)
 		ctx.PlainText(http.StatusOK, hash)
-		return
+		return true
 	}
 
 	opts := context.ServeHeaderOptions{
@@ -214,18 +233,20 @@ func servePackageFile(ctx *context.Context, params parameters, serveContent bool
 	if !serveContent {
 		ctx.SetServeHeaders(opts)
 		ctx.Status(http.StatusOK)
-		return
+		return true
 	}
 
 	s, u, _, err := packages_service.OpenBlobForDownload(ctx, pf, pb, ctx.Req.Method, nil)
 	if err != nil {
 		apiError(ctx, http.StatusInternalServerError, err)
-		return
+		return true
 	}
 
 	opts.Filename = pf.Name
 
+	countUpstreamHit(ctx, up)
 	helper.ServePackageFile(ctx, s, u, pf, opts)
+	return true
 }
 
 func mavenPkgNameKey(packageName string) string {

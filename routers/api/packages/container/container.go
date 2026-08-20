@@ -515,7 +515,7 @@ func getBlobFromContext(ctx *context.Context) (*packages_model.PackageFileDescri
 
 // https://github.com/opencontainers/distribution-spec/blob/main/spec.md#checking-if-content-exists-in-the-registry
 func HeadBlob(ctx *context.Context) {
-	blob, err := getBlobFromContext(ctx)
+	blob, err := getBlobFromContextOrProxy(ctx)
 	if err != nil {
 		if errors.Is(err, container_model.ErrContainerBlobNotExist) {
 			apiErrorDefined(ctx, errBlobUnknown)
@@ -534,7 +534,7 @@ func HeadBlob(ctx *context.Context) {
 
 // https://github.com/opencontainers/distribution-spec/blob/main/spec.md#pulling-blobs
 func GetBlob(ctx *context.Context) {
-	blob, err := getBlobFromContext(ctx)
+	blob, err := getBlobFromContextOrProxy(ctx)
 	if err != nil {
 		if errors.Is(err, container_model.ErrContainerBlobNotExist) {
 			apiErrorDefined(ctx, errBlobUnknown)
@@ -649,7 +649,7 @@ func getManifestFromContext(ctx *context.Context) (*packages_model.PackageFileDe
 
 // https://github.com/opencontainers/distribution-spec/blob/main/spec.md#checking-if-content-exists-in-the-registry
 func HeadManifest(ctx *context.Context) {
-	manifest, err := getManifestFromContext(ctx)
+	manifest, err := getManifestFromContextOrProxy(ctx)
 	if err != nil {
 		if errors.Is(err, container_model.ErrContainerBlobNotExist) {
 			apiErrorDefined(ctx, errManifestUnknown)
@@ -669,7 +669,7 @@ func HeadManifest(ctx *context.Context) {
 
 // https://github.com/opencontainers/distribution-spec/blob/main/spec.md#pulling-manifests
 func GetManifest(ctx *context.Context) {
-	manifest, err := getManifestFromContext(ctx)
+	manifest, err := getManifestFromContextOrProxy(ctx)
 	if err != nil {
 		if errors.Is(err, container_model.ErrContainerBlobNotExist) {
 			apiErrorDefined(ctx, errManifestUnknown)

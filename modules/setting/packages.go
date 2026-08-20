@@ -15,6 +15,8 @@ var (
 	Packages = struct {
 		Storage *Storage
 		Enabled bool
+		// EnableUpstreamProxy gates the pull-through / freeze proxy feature (default off).
+		EnableUpstreamProxy bool
 
 		LimitTotalOwnerCount    int64
 		LimitTotalOwnerSize     int64
