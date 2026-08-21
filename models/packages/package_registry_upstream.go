@@ -72,7 +72,9 @@ type PackageRegistryUpstream struct {
 
 	// MetadataTTL is the revalidation window (seconds) for mutable content in pull_through mode.
 	MetadataTTL int64 `xorm:"NOT NULL DEFAULT 900"`
-	Enabled     bool  `xorm:"INDEX NOT NULL DEFAULT true"`
+	// Priority orders upstreams within an (owner,type) group; lower is tried first (ties by id).
+	Priority int64 `xorm:"NOT NULL DEFAULT 100"`
+	Enabled  bool  `xorm:"INDEX NOT NULL DEFAULT true"`
 
 	// Observability: FetchCount = upstream fetches, HitCount = served from local cache.
 	FetchCount int64 `xorm:"NOT NULL DEFAULT 0"`
@@ -121,6 +123,18 @@ func GetEnabledUpstreamByOwnerAndType(ctx context.Context, ownerID int64, packag
 		return nil, ErrPackageRegistryUpstreamNotExist
 	}
 	return u, nil
+}
+
+// GetEnabledUpstreamsByOwnerAndType returns all enabled upstreams for an (owner, type), ordered by
+// priority ascending then id (the resolution order for group/virtual behaviour: try each in turn
+// on a local miss). Returns an empty slice when none are configured.
+func GetEnabledUpstreamsByOwnerAndType(ctx context.Context, ownerID int64, packageType Type) ([]*PackageRegistryUpstream, error) {
+	ups := make([]*PackageRegistryUpstream, 0, 4)
+	err := db.GetEngine(ctx).
+		Where("owner_id = ? AND type = ? AND enabled = ?", ownerID, packageType, true).
+		OrderBy("priority ASC, id ASC").
+		Find(&ups)
+	return ups, err
 }
 
 func UpdateUpstream(ctx context.Context, u *PackageRegistryUpstream) error {

@@ -148,16 +148,27 @@ func serveMavenMetadata(ctx *context.Context, params parameters) {
 }
 
 func servePackageFile(ctx *context.Context, params parameters, serveContent bool) {
-	up := getEnabledMavenUpstream(ctx)
+	// Group resolution: local (hosted) first, then each enabled upstream in priority order.
+	ups := getEnabledMavenUpstreams(ctx)
+	var first *packages_model.PackageRegistryUpstream
+	if len(ups) > 0 {
+		first = ups[0]
+	}
 
-	// Serve from local (cached) storage if present.
-	if servePackageFileLocal(ctx, params, serveContent, up) {
+	// Serve from local (cached) storage if present (hit attributed to the first group member).
+	if servePackageFileLocal(ctx, params, serveContent, first) {
 		return
 	}
 
-	// Local miss: pull-through proxy (frozen mode never fetches), then retry the local serve once.
-	if proxyFetchAndStore(ctx, params, up) && servePackageFileLocal(ctx, params, serveContent, nil) {
-		return
+	// Local miss: try each pull_through upstream in order (frozen members never fetch — their
+	// cached content, if any, was already served by the local lookup above). First hit wins.
+	for _, up := range ups {
+		if up.Mode != packages_model.UpstreamModePullThrough {
+			continue
+		}
+		if proxyFetchAndStore(ctx, params, up) && servePackageFileLocal(ctx, params, serveContent, nil) {
+			return
+		}
 	}
 
 	apiError(ctx, http.StatusNotFound, packages_model.ErrPackageFileNotExist)

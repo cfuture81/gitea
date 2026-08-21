@@ -424,6 +424,7 @@ func prepareMigrationTasks() []*migration {
 		newMigration(348, "Recreate email_hash table for SHA256 avatar hashes", v28.RecreateEmailHashTable),
 		newMigration(349, "Add package registry upstream table", v28.AddPackageRegistryUpstream),
 		newMigration(350, "Add pinned_tags column to package registry upstream", v28.AddPinnedTagsToPackageRegistryUpstream),
+		newMigration(351, "Add priority column to package registry upstream", v28.AddPriorityToPackageRegistryUpstream),
 	}
 	return preparedMigrations
 }

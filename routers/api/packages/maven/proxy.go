@@ -24,17 +24,17 @@ import (
 
 var proxyHTTPClient = &http.Client{Timeout: 60 * time.Second}
 
-// getEnabledMavenUpstream returns the owner's enabled maven upstream, or nil if the feature is
-// off, none is configured, or lookup fails.
-func getEnabledMavenUpstream(ctx *context.Context) *packages_model.PackageRegistryUpstream {
+// getEnabledMavenUpstreams returns the owner's enabled maven upstreams in resolution order
+// (priority asc), or nil if the feature is off / none configured / lookup fails.
+func getEnabledMavenUpstreams(ctx *context.Context) []*packages_model.PackageRegistryUpstream {
 	if !setting.Packages.EnableUpstreamProxy {
 		return nil
 	}
-	up, err := packages_model.GetEnabledUpstreamByOwnerAndType(ctx, ctx.Package.Owner.ID, packages_model.TypeMaven)
+	ups, err := packages_model.GetEnabledUpstreamsByOwnerAndType(ctx, ctx.Package.Owner.ID, packages_model.TypeMaven)
 	if err != nil {
 		return nil
 	}
-	return up
+	return ups
 }
 
 // countUpstreamHit increments the served-from-cache counter (observability), when an upstream

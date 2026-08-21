@@ -39,17 +39,17 @@ var manifestAcceptHeader = strings.Join([]string{
 	"application/vnd.docker.distribution.manifest.v2+json",
 }, ", ")
 
-// getEnabledContainerUpstream returns the owner's enabled container upstream, or nil if the
-// feature is off, none is configured, or lookup fails.
-func getEnabledContainerUpstream(ctx *context.Context) *packages_model.PackageRegistryUpstream {
+// getEnabledContainerUpstreams returns the owner's enabled container upstreams in resolution
+// order (priority asc), or nil if the feature is off / none configured / lookup fails.
+func getEnabledContainerUpstreams(ctx *context.Context) []*packages_model.PackageRegistryUpstream {
 	if !setting.Packages.EnableUpstreamProxy {
 		return nil
 	}
-	up, err := packages_model.GetEnabledUpstreamByOwnerAndType(ctx, ctx.Package.Owner.ID, packages_model.TypeContainer)
+	ups, err := packages_model.GetEnabledUpstreamsByOwnerAndType(ctx, ctx.Package.Owner.ID, packages_model.TypeContainer)
 	if err != nil {
 		return nil
 	}
-	return up
+	return ups
 }
 
 // countContainerUpstreamHit increments the served-from-cache counter (observability).
@@ -408,38 +408,58 @@ func (c *upstreamClient) ensureBlob(ctx *context.Context, image, dgst string) bo
 // (in pull_through mode) fetches it from the upstream on a miss and returns the freshly cached
 // manifest. Frozen mode never contacts the upstream and simply misses.
 func getManifestFromContextOrProxy(ctx *context.Context) (*packages_model.PackageFileDescriptor, error) {
-	up := getEnabledContainerUpstream(ctx)
+	ups := getEnabledContainerUpstreams(ctx)
+	var first *packages_model.PackageRegistryUpstream
+	if len(ups) > 0 {
+		first = ups[0]
+	}
 	manifest, err := getManifestFromContext(ctx)
 	if err == nil {
-		countContainerUpstreamHit(ctx, up)
+		countContainerUpstreamHit(ctx, first)
 		return manifest, nil
 	}
-	if !errors.Is(err, container_model.ErrContainerBlobNotExist) || up == nil {
+	if !errors.Is(err, container_model.ErrContainerBlobNotExist) || len(ups) == 0 {
 		return nil, err
 	}
-	if !proxyEnsureManifest(ctx, up, ctx.PathParam("image"), ctx.PathParam("reference")) {
-		return nil, err
+	image, reference := ctx.PathParam("image"), ctx.PathParam("reference")
+	for _, up := range ups {
+		if up.Mode != packages_model.UpstreamModePullThrough {
+			continue
+		}
+		if proxyEnsureManifest(ctx, up, image, reference) {
+			return getManifestFromContext(ctx)
+		}
 	}
-	return getManifestFromContext(ctx)
+	return nil, err
 }
 
 // getBlobFromContextOrProxy mirrors getManifestFromContextOrProxy for blobs (config/layer digests).
 func getBlobFromContextOrProxy(ctx *context.Context) (*packages_model.PackageFileDescriptor, error) {
-	up := getEnabledContainerUpstream(ctx)
+	ups := getEnabledContainerUpstreams(ctx)
+	var first *packages_model.PackageRegistryUpstream
+	if len(ups) > 0 {
+		first = ups[0]
+	}
 	blob, err := getBlobFromContext(ctx)
 	if err == nil {
-		countContainerUpstreamHit(ctx, up)
+		countContainerUpstreamHit(ctx, first)
 		return blob, nil
 	}
-	if !errors.Is(err, container_model.ErrContainerBlobNotExist) || up == nil {
+	if !errors.Is(err, container_model.ErrContainerBlobNotExist) || len(ups) == 0 {
 		return nil, err
 	}
 	d := digest.Digest(ctx.PathParam("digest"))
 	if d.Validate() != nil {
 		return nil, err
 	}
-	if !proxyEnsureBlob(ctx, up, ctx.PathParam("image"), string(d)) {
-		return nil, err
+	image := ctx.PathParam("image")
+	for _, up := range ups {
+		if up.Mode != packages_model.UpstreamModePullThrough {
+			continue
+		}
+		if proxyEnsureBlob(ctx, up, image, string(d)) {
+			return getBlobFromContext(ctx)
+		}
 	}
-	return getBlobFromContext(ctx)
+	return nil, err
 }

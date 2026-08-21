@@ -31,6 +31,7 @@ type upstreamResponse struct {
 	AuthType     string                        `json:"auth_type"`
 	AuthUsername string                        `json:"auth_username"`
 	MetadataTTL  int64                         `json:"metadata_ttl"`
+	Priority     int64                         `json:"priority"`
 	Enabled      bool                          `json:"enabled"`
 	FetchCount   int64                         `json:"fetch_count"`
 	HitCount     int64                         `json:"hit_count"`
@@ -50,6 +51,7 @@ func toResponse(u *packages_model.PackageRegistryUpstream) *upstreamResponse {
 		AuthType:     string(u.AuthType),
 		AuthUsername: u.AuthUsername,
 		MetadataTTL:  u.MetadataTTL,
+		Priority:     u.Priority,
 		Enabled:      u.Enabled,
 		FetchCount:   u.FetchCount,
 		HitCount:     u.HitCount,
@@ -68,6 +70,7 @@ type upstreamRequest struct {
 	AuthUsername string                        `json:"auth_username"`
 	AuthSecret   string                        `json:"auth_secret"`
 	MetadataTTL  int64                         `json:"metadata_ttl"`
+	Priority     *int64                        `json:"priority"`
 	Enabled      *bool                         `json:"enabled"`
 	PinnedTags   []*packages_model.UpstreamPin `json:"pinned_tags"`
 }
@@ -134,6 +137,10 @@ func Create(ctx *context.Context) {
 	if req.Enabled != nil {
 		enabled = *req.Enabled
 	}
+	priority := int64(100)
+	if req.Priority != nil {
+		priority = *req.Priority
+	}
 
 	u := &packages_model.PackageRegistryUpstream{
 		OwnerID:      ctx.Package.Owner.ID,
@@ -145,6 +152,7 @@ func Create(ctx *context.Context) {
 		AuthUsername: req.AuthUsername,
 		AuthSecret:   req.AuthSecret,
 		MetadataTTL:  ttl,
+		Priority:     priority,
 		Enabled:      enabled,
 		PinnedTags:   req.PinnedTags,
 	}
@@ -228,6 +236,9 @@ func Update(ctx *context.Context) {
 	}
 	if req.Enabled != nil {
 		u.Enabled = *req.Enabled
+	}
+	if req.Priority != nil {
+		u.Priority = *req.Priority
 	}
 	if req.PinnedTags != nil {
 		u.PinnedTags = req.PinnedTags
