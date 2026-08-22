@@ -69,6 +69,7 @@
 							<option value="maven" {{if and $e (eq (printf "%s" $e.Type) "maven")}}selected{{end}}>maven</option>
 							<option value="container" {{if and $e (eq (printf "%s" $e.Type) "container")}}selected{{end}}>container</option>
 							<option value="npm" {{if and $e (eq (printf "%s" $e.Type) "npm")}}selected{{end}}>npm</option>
+							<option value="pypi" {{if and $e (eq (printf "%s" $e.Type) "pypi")}}selected{{end}}>pypi</option>
 						</select>
 						{{if $e}}<input type="hidden" name="type" value="{{$e.Type}}">{{end}}
 					</div>

@@ -48,6 +48,16 @@ func apiError(ctx *context.Context, status int, obj any) {
 func PackageMetadata(ctx *context.Context) {
 	packageName := normalizer.Replace(ctx.PathParam("id"))
 
+	// Group resolution: pull_through members serve the upstream simple index (file links rewritten
+	// to this registry). Frozen members fall through to local generation below.
+	for _, up := range getEnabledPyPIUpstreams(ctx) {
+		if up.Mode == packages_model.UpstreamModePullThrough {
+			if serveProxiedSimpleIndex(ctx, up, packageName) {
+				return
+			}
+		}
+	}
+
 	pvs, err := packages_model.GetVersionsByPackageName(ctx, ctx.Package.Owner.ID, packages_model.TypePyPI, packageName)
 	if err != nil {
 		apiError(ctx, http.StatusInternalServerError, err)
@@ -81,19 +91,26 @@ func DownloadPackageFile(ctx *context.Context) {
 	packageVersion := ctx.PathParam("version")
 	filename := ctx.PathParam("filename")
 
-	s, u, pf, err := packages_service.OpenFileForDownloadByPackageNameAndVersion(
-		ctx,
-		&packages_service.PackageInfo{
-			Owner:       ctx.Package.Owner,
-			PackageType: packages_model.TypePyPI,
-			Name:        packageName,
-			Version:     packageVersion,
-		},
-		&packages_service.PackageFileInfo{
-			Filename: filename,
-		},
-		ctx.Req.Method,
-	)
+	ups := getEnabledPyPIUpstreams(ctx)
+	info := &packages_service.PackageInfo{Owner: ctx.Package.Owner, PackageType: packages_model.TypePyPI, Name: packageName, Version: packageVersion}
+	finfo := &packages_service.PackageFileInfo{Filename: filename}
+
+	s, u, pf, err := packages_service.OpenFileForDownloadByPackageNameAndVersion(ctx, info, finfo, ctx.Req.Method)
+	proxied := false
+	if errors.Is(err, packages_model.ErrPackageNotExist) || errors.Is(err, packages_model.ErrPackageFileNotExist) {
+		upstreamURL := decodeUpstreamFileURL(ctx.FormString("u"))
+		for _, up := range ups {
+			if up.Mode != packages_model.UpstreamModePullThrough {
+				continue
+			}
+			if proxyFetchPyPIFile(ctx, up, packageName, packageVersion, filename, upstreamURL) {
+				proxied = true
+				if s, u, pf, err = packages_service.OpenFileForDownloadByPackageNameAndVersion(ctx, info, finfo, ctx.Req.Method); err == nil {
+					break
+				}
+			}
+		}
+	}
 	if err != nil {
 		if errors.Is(err, packages_model.ErrPackageNotExist) || errors.Is(err, packages_model.ErrPackageFileNotExist) {
 			apiError(ctx, http.StatusNotFound, err)
@@ -101,6 +118,9 @@ func DownloadPackageFile(ctx *context.Context) {
 		}
 		apiError(ctx, http.StatusInternalServerError, err)
 		return
+	}
+	if !proxied {
+		countPyPIHit(ctx, ups)
 	}
 
 	helper.ServePackageFile(ctx, s, u, pf)
