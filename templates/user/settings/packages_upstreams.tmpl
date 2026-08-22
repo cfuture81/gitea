@@ -13,11 +13,15 @@
 				Pull-through caches a remote registry on a miss; <strong>frozen</strong> serves only what is already cached and never contacts the upstream.
 				Use <strong>pinned tags</strong> to alias a mutable tag (e.g. <code>latest</code>) to a fixed version, so clients keep pulling <code>latest</code> but receive the pinned version (container only).
 			</p>
+			<div class="ui info message">
+				<strong>Freshness &amp; retention.</strong> Pull-through revalidates mutable metadata within the <em>TTL</em> window and negatively caches upstream 404s for the same window (frozen never contacts the upstream). Cached artifacts are ordinary package versions (tagged <code>upstream.cached</code>) and are pruned by your
+				<a href="{{AppSubUrl}}/user/settings/packages">package cleanup rules</a> — tip: use a dedicated owner/org for proxied content so an age-based rule prunes only the cache, mirroring Nexus per-proxy policies.
+			</div>
 			{{if .Upstreams}}
 			<table class="ui table">
 				<thead>
 					<tr>
-						<th>Type</th><th>Name</th><th>Upstream URL</th><th>Mode</th><th>Prio</th><th>Enabled</th>
+						<th>Type</th><th>Name</th><th>Upstream URL</th><th>Mode</th><th>Prio</th><th>TTL</th><th>Enabled</th>
 						<th>Fetches</th><th>Hits</th><th>Pins</th><th></th>
 					</tr>
 				</thead>
@@ -29,6 +33,7 @@
 						<td><code>{{.URL}}</code></td>
 						<td>{{if eq (printf "%s" .Mode) "frozen"}}<span class="ui red label">frozen</span>{{else}}<span class="ui green label">pull_through</span>{{end}}</td>
 						<td>{{.Priority}}</td>
+						<td>{{.MetadataTTL}}s</td>
 						<td>{{if .Enabled}}yes{{else}}no{{end}}</td>
 						<td>{{.FetchCount}}</td>
 						<td>{{.HitCount}}</td>
@@ -43,7 +48,7 @@
 					{{if .PinnedTags}}
 					<tr>
 						<td></td>
-						<td colspan="9">
+						<td colspan="10">
 							{{range .PinnedTags}}<span class="ui label">{{.Image}}:{{.Tag}} &rarr; {{.Target}}</span> {{end}}
 						</td>
 					</tr>

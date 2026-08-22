@@ -19,6 +19,7 @@ import (
 	"gitea.dev/modules/globallock"
 	"gitea.dev/modules/log"
 	packages_module "gitea.dev/modules/packages"
+	"gitea.dev/modules/packages/proxycache"
 	pypi_module "gitea.dev/modules/packages/pypi"
 	"gitea.dev/modules/setting"
 	"gitea.dev/services/context"
@@ -166,8 +167,13 @@ func proxyFetchPyPIFile(ctx *context.Context, up *packages_model.PackageRegistry
 	}
 	defer releaser()
 
+	negKey := strconv.FormatInt(up.ID, 10) + "|" + name + "/" + version + "/" + filename
+	if proxycache.Blocked(negKey) {
+		return false
+	}
 	rc, ok := httpGetPyPI(ctx, up, upstreamURL, "")
 	if !ok {
+		proxycache.Block(negKey, time.Duration(up.MetadataTTL)*time.Second)
 		return false
 	}
 	defer rc.Close()
@@ -179,7 +185,7 @@ func proxyFetchPyPIFile(ctx *context.Context, up *packages_model.PackageRegistry
 	}
 	defer buf.Close()
 
-	_, _, err = packages_service.CreatePackageOrAddFileToExisting(ctx,
+	pv, _, err := packages_service.CreatePackageOrAddFileToExisting(ctx,
 		&packages_service.PackageCreationInfo{
 			PackageInfo: packages_service.PackageInfo{
 				Owner:       ctx.Package.Owner,
@@ -201,6 +207,11 @@ func proxyFetchPyPIFile(ctx *context.Context, up *packages_model.PackageRegistry
 	if err != nil && !errors.Is(err, packages_model.ErrDuplicatePackageFile) {
 		log.Error("pypi proxy: store file %s/%s/%s: %v", name, version, filename, err)
 		return false
+	}
+	if pv != nil {
+		if err := packages_model.TagVersionCached(ctx, pv.ID, up.Name); err != nil {
+			log.Error("pypi proxy: tag cached: %v", err)
+		}
 	}
 
 	if err := packages_model.IncrUpstreamFetchCount(ctx, up.ID); err != nil {

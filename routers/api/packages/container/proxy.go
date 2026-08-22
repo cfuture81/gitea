@@ -20,6 +20,7 @@ import (
 	"gitea.dev/modules/log"
 	packages_module "gitea.dev/modules/packages"
 	container_module "gitea.dev/modules/packages/container"
+	"gitea.dev/modules/packages/proxycache"
 	"gitea.dev/modules/setting"
 	"gitea.dev/services/context"
 	packages_service "gitea.dev/services/packages"
@@ -113,13 +114,23 @@ func proxyEnsureManifest(ctx *context.Context, up *packages_model.PackageRegistr
 		log.Info("container proxy: pin %s:%s -> upstream %q", image, reference, t)
 	}
 
+	negKey := strconv.FormatInt(up.ID, 10) + "|" + strings.ToLower(image) + "|" + reference
+	if proxycache.Blocked(negKey) {
+		return false
+	}
 	c := newUpstreamClient(up)
 	if !c.fetchAndStoreManifest(ctx, image, upstreamRef, reference) {
+		proxycache.Block(negKey, time.Duration(up.MetadataTTL)*time.Second)
 		return false
 	}
 
 	if err := packages_model.IncrUpstreamFetchCount(ctx, up.ID); err != nil {
 		log.Error("container proxy: incr fetch count: %v", err)
+	}
+	if pv, err := packages_model.GetVersionByNameAndVersion(ctx, ctx.Package.Owner.ID, packages_model.TypeContainer, strings.ToLower(image), strings.ToLower(reference)); err == nil {
+		if err := packages_model.TagVersionCached(ctx, pv.ID, up.Name); err != nil {
+			log.Error("container proxy: tag cached: %v", err)
+		}
 	}
 	log.Info("container proxy: cached manifest %s:%s from upstream %q (owner %d)", image, reference, up.URL, up.OwnerID)
 	return manifestExistsLocally(ctx, image, reference)

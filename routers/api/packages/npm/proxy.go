@@ -24,6 +24,7 @@ import (
 	"gitea.dev/modules/log"
 	packages_module "gitea.dev/modules/packages"
 	npm_module "gitea.dev/modules/packages/npm"
+	"gitea.dev/modules/packages/proxycache"
 	"gitea.dev/modules/setting"
 	"gitea.dev/services/context"
 	packages_service "gitea.dev/services/packages"
@@ -136,8 +137,13 @@ func proxyFetchNpmTarball(ctx *context.Context, up *packages_model.PackageRegist
 	}
 	defer releaser()
 
+	negKey := strconv.FormatInt(up.ID, 10) + "|" + name + "/-/" + filename
+	if proxycache.Blocked(negKey) {
+		return false
+	}
 	rc, ok := httpGetNpm(ctx, up, npmUpstreamBase(up)+"/"+name+"/-/"+filename, "")
 	if !ok {
+		proxycache.Block(negKey, time.Duration(up.MetadataTTL)*time.Second)
 		return false
 	}
 	defer rc.Close()
@@ -205,7 +211,7 @@ func storeNpmTarball(ctx *context.Context, up *packages_model.PackageRegistryUps
 	}
 	defer buf.Close()
 
-	_, _, err = packages_service.CreatePackageAndAddFile(ctx,
+	pv, _, err := packages_service.CreatePackageAndAddFile(ctx,
 		&packages_service.PackageCreationInfo{
 			PackageInfo: packages_service.PackageInfo{
 				Owner:       ctx.Package.Owner,
@@ -227,6 +233,11 @@ func storeNpmTarball(ctx *context.Context, up *packages_model.PackageRegistryUps
 	if err != nil && !errors.Is(err, packages_model.ErrDuplicatePackageVersion) && !errors.Is(err, packages_model.ErrDuplicatePackageFile) {
 		log.Error("npm proxy: store tarball: %v", err)
 		return false
+	}
+	if pv != nil {
+		if err := packages_model.TagVersionCached(ctx, pv.ID, up.Name); err != nil {
+			log.Error("npm proxy: tag cached: %v", err)
+		}
 	}
 
 	if err := packages_model.IncrUpstreamFetchCount(ctx, up.ID); err != nil {

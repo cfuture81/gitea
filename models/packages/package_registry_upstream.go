@@ -172,3 +172,19 @@ func (u *PackageRegistryUpstream) ResolvePin(image, tag string) string {
 	}
 	return ""
 }
+
+// Package properties set on proxied-cached versions (observability + retention targeting).
+const (
+	PropertyUpstreamCached = "upstream.cached"
+	PropertyUpstreamSource = "upstream.source"
+)
+
+// TagVersionCached marks a package version as fetched from an upstream proxy (source = upstream
+// name), so cached content is distinguishable from first-party uploads in the UI/API and for
+// retention reasoning. Best-effort: property errors are returned for the caller to log.
+func TagVersionCached(ctx context.Context, versionID int64, source string) error {
+	if err := InsertOrUpdateProperty(ctx, PropertyTypeVersion, versionID, PropertyUpstreamCached, "1"); err != nil {
+		return err
+	}
+	return InsertOrUpdateProperty(ctx, PropertyTypeVersion, versionID, PropertyUpstreamSource, source)
+}

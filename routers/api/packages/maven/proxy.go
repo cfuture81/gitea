@@ -16,6 +16,7 @@ import (
 	"gitea.dev/modules/globallock"
 	"gitea.dev/modules/log"
 	packages_module "gitea.dev/modules/packages"
+	"gitea.dev/modules/packages/proxycache"
 	"gitea.dev/modules/setting"
 	"gitea.dev/modules/util"
 	"gitea.dev/services/context"
@@ -84,8 +85,14 @@ func proxyFetchAndStore(ctx *context.Context, params parameters, up *packages_mo
 		return false
 	}
 
+	negKey := strconv.FormatInt(up.ID, 10) + "|" + reqPath
+	if proxycache.Blocked(negKey) {
+		log.Info("maven proxy: negative-cache short-circuit for %s (upstream %q)", reqPath, up.Name)
+		return false
+	}
 	body, ok := httpGetUpstream(ctx, up, remoteURL)
 	if !ok {
+		proxycache.Block(negKey, time.Duration(up.MetadataTTL)*time.Second)
 		return false
 	}
 	defer body.Close()
@@ -112,10 +119,14 @@ func proxyFetchAndStore(ctx *context.Context, params parameters, up *packages_mo
 		Data:              buf,
 		OverwriteExisting: params.IsMeta,
 	}
-	if _, _, err := packages_service.CreatePackageOrAddFileToExisting(ctx, pvci, pfci); err != nil {
-		if !errors.Is(err, packages_model.ErrDuplicatePackageFile) {
-			log.Error("maven proxy: store error: %v", err)
-			return false
+	pv, _, err := packages_service.CreatePackageOrAddFileToExisting(ctx, pvci, pfci)
+	if err != nil && !errors.Is(err, packages_model.ErrDuplicatePackageFile) {
+		log.Error("maven proxy: store error: %v", err)
+		return false
+	}
+	if pv != nil {
+		if err := packages_model.TagVersionCached(ctx, pv.ID, up.Name); err != nil {
+			log.Error("maven proxy: tag cached: %v", err)
 		}
 	}
 
