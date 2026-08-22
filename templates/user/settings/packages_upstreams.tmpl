@@ -17,7 +17,7 @@
 			<table class="ui table">
 				<thead>
 					<tr>
-						<th>Type</th><th>Name</th><th>Upstream URL</th><th>Mode</th><th>Enabled</th>
+						<th>Type</th><th>Name</th><th>Upstream URL</th><th>Mode</th><th>Prio</th><th>Enabled</th>
 						<th>Fetches</th><th>Hits</th><th>Pins</th><th></th>
 					</tr>
 				</thead>
@@ -28,6 +28,7 @@
 						<td>{{.Name}}</td>
 						<td><code>{{.URL}}</code></td>
 						<td>{{if eq (printf "%s" .Mode) "frozen"}}<span class="ui red label">frozen</span>{{else}}<span class="ui green label">pull_through</span>{{end}}</td>
+						<td>{{.Priority}}</td>
 						<td>{{if .Enabled}}yes{{else}}no{{end}}</td>
 						<td>{{.FetchCount}}</td>
 						<td>{{.HitCount}}</td>
@@ -42,7 +43,7 @@
 					{{if .PinnedTags}}
 					<tr>
 						<td></td>
-						<td colspan="8">
+						<td colspan="9">
 							{{range .PinnedTags}}<span class="ui label">{{.Image}}:{{.Tag}} &rarr; {{.Target}}</span> {{end}}
 						</td>
 					</tr>
@@ -67,6 +68,7 @@
 						<select name="type" {{if $e}}disabled{{end}}>
 							<option value="maven" {{if and $e (eq (printf "%s" $e.Type) "maven")}}selected{{end}}>maven</option>
 							<option value="container" {{if and $e (eq (printf "%s" $e.Type) "container")}}selected{{end}}>container</option>
+							<option value="npm" {{if and $e (eq (printf "%s" $e.Type) "npm")}}selected{{end}}>npm</option>
 						</select>
 						{{if $e}}<input type="hidden" name="type" value="{{$e.Type}}">{{end}}
 					</div>
@@ -91,6 +93,13 @@
 						<label>Metadata TTL (seconds)</label>
 						<input name="metadata_ttl" type="number" value="{{if $e}}{{$e.MetadataTTL}}{{else}}900{{end}}">
 					</div>
+				</div>
+				<div class="two fields">
+					<div class="field">
+						<label>Priority (lower = tried first within the group)</label>
+						<input name="priority" type="number" value="{{if $e}}{{$e.Priority}}{{else}}100{{end}}">
+					</div>
+					<div class="field"></div>
 				</div>
 				<div class="three fields">
 					<div class="field">

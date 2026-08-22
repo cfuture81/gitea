@@ -91,6 +91,10 @@ func UpstreamProxiesPost(ctx *context.Context) {
 	if ttl <= 0 {
 		ttl = 900
 	}
+	priority := ctx.FormInt64("priority")
+	if priority <= 0 {
+		priority = 100
+	}
 	pins, perr := parsePinnedTags(ctx.FormString("pinned_tags"))
 	if perr != "" {
 		ctx.Flash.Error(perr)
@@ -108,6 +112,7 @@ func UpstreamProxiesPost(ctx *context.Context) {
 		AuthUsername: strings.TrimSpace(ctx.FormString("auth_username")),
 		AuthSecret:   ctx.FormString("auth_secret"),
 		MetadataTTL:  ttl,
+		Priority:     priority,
 		Enabled:      ctx.FormBool("enabled"),
 		PinnedTags:   pins,
 	}
@@ -154,6 +159,9 @@ func UpstreamProxiesEditPost(ctx *context.Context) {
 	}
 	if ttl := ctx.FormInt64("metadata_ttl"); ttl > 0 {
 		u.MetadataTTL = ttl
+	}
+	if prio := ctx.FormInt64("priority"); prio > 0 {
+		u.Priority = prio
 	}
 	u.Enabled = ctx.FormBool("enabled")
 

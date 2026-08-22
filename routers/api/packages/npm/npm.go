@@ -55,6 +55,16 @@ func packageNameFromParams(ctx *context.Context) string {
 func PackageMetadata(ctx *context.Context) {
 	packageName := packageNameFromParams(ctx)
 
+	// Group resolution: for pull_through members, serve the upstream packument (tarball URLs
+	// rewritten to this registry). Frozen members fall through to local generation below.
+	for _, up := range getEnabledNpmUpstreams(ctx) {
+		if up.Mode == packages_model.UpstreamModePullThrough {
+			if serveProxiedPackument(ctx, up, packageName) {
+				return
+			}
+		}
+	}
+
 	pvs, err := packages_model.GetVersionsByPackageName(ctx, ctx.Package.Owner.ID, packages_model.TypeNpm, packageName)
 	if err != nil {
 		apiError(ctx, http.StatusInternalServerError, err)
@@ -85,19 +95,25 @@ func DownloadPackageFile(ctx *context.Context) {
 	packageVersion := ctx.PathParam("version")
 	filename := ctx.PathParam("filename")
 
-	s, u, pf, err := packages_service.OpenFileForDownloadByPackageNameAndVersion(
-		ctx,
-		&packages_service.PackageInfo{
-			Owner:       ctx.Package.Owner,
-			PackageType: packages_model.TypeNpm,
-			Name:        packageName,
-			Version:     packageVersion,
-		},
-		&packages_service.PackageFileInfo{
-			Filename: filename,
-		},
-		ctx.Req.Method,
-	)
+	ups := getEnabledNpmUpstreams(ctx)
+	info := &packages_service.PackageInfo{Owner: ctx.Package.Owner, PackageType: packages_model.TypeNpm, Name: packageName, Version: packageVersion}
+	finfo := &packages_service.PackageFileInfo{Filename: filename}
+
+	s, u, pf, err := packages_service.OpenFileForDownloadByPackageNameAndVersion(ctx, info, finfo, ctx.Req.Method)
+	proxied := false
+	if errors.Is(err, packages_model.ErrPackageNotExist) || errors.Is(err, packages_model.ErrPackageFileNotExist) {
+		for _, up := range ups {
+			if up.Mode != packages_model.UpstreamModePullThrough {
+				continue
+			}
+			if proxyFetchNpmTarball(ctx, up, packageName, filename) {
+				proxied = true
+				if s, u, pf, err = packages_service.OpenFileForDownloadByPackageNameAndVersion(ctx, info, finfo, ctx.Req.Method); err == nil {
+					break
+				}
+			}
+		}
+	}
 	if err != nil {
 		if errors.Is(err, packages_model.ErrPackageNotExist) || errors.Is(err, packages_model.ErrPackageFileNotExist) {
 			apiError(ctx, http.StatusNotFound, err)
@@ -106,24 +122,47 @@ func DownloadPackageFile(ctx *context.Context) {
 		apiError(ctx, http.StatusInternalServerError, err)
 		return
 	}
-
+	if !proxied {
+		countNpmHit(ctx, ups)
+	}
 	helper.ServePackageFile(ctx, s, u, pf)
 }
 
 // DownloadPackageFileByName finds the version and serves the contents of a package
 func DownloadPackageFileByName(ctx *context.Context) {
 	filename := ctx.PathParam("filename")
+	packageName := packageNameFromParams(ctx)
+	ups := getEnabledNpmUpstreams(ctx)
 
-	pvs, _, err := packages_model.SearchVersions(ctx, &packages_model.PackageSearchOptions{
+	searchOpts := &packages_model.PackageSearchOptions{
 		OwnerID: ctx.Package.Owner.ID,
 		Type:    packages_model.TypeNpm,
 		Name: packages_model.SearchValue{
 			ExactMatch: true,
-			Value:      packageNameFromParams(ctx),
+			Value:      packageName,
 		},
 		HasFileWithName: filename,
 		IsInternal:      optional.Some(false),
-	})
+	}
+	pvs, _, err := packages_model.SearchVersions(ctx, searchOpts)
+	if err != nil {
+		apiError(ctx, http.StatusInternalServerError, err)
+		return
+	}
+	proxied := false
+	if len(pvs) != 1 {
+		for _, up := range ups {
+			if up.Mode != packages_model.UpstreamModePullThrough {
+				continue
+			}
+			if proxyFetchNpmTarball(ctx, up, packageName, filename) {
+				proxied = true
+				if pvs, _, err = packages_model.SearchVersions(ctx, searchOpts); err == nil && len(pvs) == 1 {
+					break
+				}
+			}
+		}
+	}
 	if err != nil {
 		apiError(ctx, http.StatusInternalServerError, err)
 		return
@@ -131,6 +170,9 @@ func DownloadPackageFileByName(ctx *context.Context) {
 	if len(pvs) != 1 {
 		apiError(ctx, http.StatusNotFound, nil)
 		return
+	}
+	if !proxied {
+		countNpmHit(ctx, ups)
 	}
 
 	s, u, pf, err := packages_service.OpenFileForDownloadByPackageVersion(

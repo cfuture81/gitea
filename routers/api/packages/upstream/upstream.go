@@ -19,6 +19,7 @@ import (
 var supportedTypes = map[packages_model.Type]bool{
 	packages_model.TypeMaven:     true,
 	packages_model.TypeContainer: true,
+	packages_model.TypeNpm:       true,
 }
 
 type upstreamResponse struct {
