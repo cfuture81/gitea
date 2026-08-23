@@ -7,7 +7,10 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -313,6 +316,105 @@ func TestPackageUpstreamProxyPyPI(t *testing.T) {
 		assert.Equal(t, before, fileHits.Load())
 		// cached file still served
 		req = NewRequest(t, "GET", base+"/files/demo/1.0.0/demo-1.0.0.tar.gz").AddBasicAuth(user.Name)
+		MakeRequest(t, req, http.StatusOK)
+	})
+}
+
+// TestPackageUpstreamProxyContainer exercises the Docker/OCI pull-through + freeze proxy against a
+// hermetic fake registry (incl. the Bearer token-challenge flow, manifest + blob fetch).
+func TestPackageUpstreamProxyContainer(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+	defer test.MockVariableValue(&setting.Packages.EnableUpstreamProxy, true)()
+	user := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
+
+	sha := func(b []byte) string { s := sha256.Sum256(b); return "sha256:" + hex.EncodeToString(s[:]) }
+	configJSON := []byte(`{"architecture":"amd64","os":"linux","rootfs":{"type":"layers","diff_ids":[]}}`)
+	layer := []byte("fake-layer-bytes")
+	cfgDigest, layerDigest := sha(configJSON), sha(layer)
+	manifest := []byte(fmt.Sprintf(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"%s","size":%d},"layers":[{"mediaType":"application/vnd.oci.image.layer.v1.tar+gzip","digest":"%s","size":%d}]}`,
+		cfgDigest, len(configJSON), layerDigest, len(layer)))
+	const mediaType = "application/vnd.oci.image.manifest.v1+json"
+
+	var manifestHits atomic.Int64
+	var ts *httptest.Server
+	ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// token endpoint (no auth required)
+		if r.URL.Path == "/token" {
+			_, _ = w.Write([]byte(`{"token":"faketoken"}`))
+			return
+		}
+		// Bearer challenge for /v2 resources
+		if r.Header.Get("Authorization") == "" {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="`+ts.URL+`/token",service="fake",scope="repository:demo:pull"`)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		switch r.URL.Path {
+		case "/v2/demo/manifests/1.0":
+			manifestHits.Add(1)
+			w.Header().Set("Content-Type", mediaType)
+			_, _ = w.Write(manifest)
+		case "/v2/demo/blobs/" + cfgDigest:
+			_, _ = w.Write(configJSON)
+		case "/v2/demo/blobs/" + layerDigest:
+			_, _ = w.Write(layer)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer ts.Close()
+
+	up, err := packages_model.InsertUpstream(t.Context(), &packages_model.PackageRegistryUpstream{
+		OwnerID: user.ID, Type: packages_model.TypeContainer, Name: "dockerhub", URL: ts.URL,
+		Mode: packages_model.UpstreamModePullThrough, AuthType: packages_model.UpstreamAuthNone,
+		MetadataTTL: 900, Enabled: true, Priority: 100,
+	})
+	require.NoError(t, err)
+
+	// Gitea container-registry bearer token for user2.
+	var tok struct {
+		Token string `json:"token"`
+	}
+	resp := MakeRequest(t, NewRequest(t, "GET", setting.AppURL+"v2/token").AddBasicAuth(user.Name), http.StatusOK)
+	DecodeJSON(t, resp, &tok)
+	userToken := "Bearer " + tok.Token
+	url := setting.AppURL + "v2/user2/demo"
+
+	t.Run("PullThroughColdManifest", func(t *testing.T) {
+		defer tests.PrintCurrentTest(t)()
+		req := NewRequest(t, "GET", url+"/manifests/1.0").AddTokenAuth(userToken).
+			SetHeader("Accept", mediaType)
+		resp := MakeRequest(t, req, http.StatusOK)
+		assert.Equal(t, manifest, resp.Body.Bytes())
+		assert.Positive(t, manifestHits.Load())
+		u, _ := packages_model.GetUpstreamByID(t.Context(), up.ID)
+		assert.EqualValues(t, 1, u.FetchCount)
+	})
+	t.Run("CachedBlobServed", func(t *testing.T) {
+		defer tests.PrintCurrentTest(t)()
+		req := NewRequest(t, "GET", url+"/blobs/"+layerDigest).AddTokenAuth(userToken)
+		resp := MakeRequest(t, req, http.StatusOK)
+		assert.Equal(t, layer, resp.Body.Bytes())
+	})
+	t.Run("WarmManifestFromCache", func(t *testing.T) {
+		defer tests.PrintCurrentTest(t)()
+		before := manifestHits.Load()
+		req := NewRequest(t, "GET", url+"/manifests/1.0").AddTokenAuth(userToken).SetHeader("Accept", mediaType)
+		MakeRequest(t, req, http.StatusOK)
+		assert.Equal(t, before, manifestHits.Load(), "warm manifest must not contact upstream")
+	})
+	t.Run("FrozenServesCacheOnly", func(t *testing.T) {
+		defer tests.PrintCurrentTest(t)()
+		u, _ := packages_model.GetUpstreamByID(t.Context(), up.ID)
+		u.Mode = packages_model.UpstreamModeFrozen
+		require.NoError(t, packages_model.UpdateUpstream(t.Context(), u))
+		before := manifestHits.Load()
+		// uncached tag denied, upstream not contacted
+		req := NewRequest(t, "GET", url+"/manifests/2.0").AddTokenAuth(userToken).SetHeader("Accept", mediaType)
+		MakeRequest(t, req, http.StatusNotFound)
+		assert.Equal(t, before, manifestHits.Load())
+		// cached tag still served
+		req = NewRequest(t, "GET", url+"/manifests/1.0").AddTokenAuth(userToken).SetHeader("Accept", mediaType)
 		MakeRequest(t, req, http.StatusOK)
 	})
 }
