@@ -15,7 +15,7 @@
 				Use <strong>pinned tags</strong> to alias a mutable tag (e.g. <code>latest</code>) to a fixed version, so clients keep pulling <code>latest</code> but receive the pinned version (container only).
 			</p>
 			<div class="ui info message">
-				<strong>Freshness &amp; retention.</strong> Pull-through revalidates mutable metadata within the <em>TTL</em> window and negatively caches upstream 404s for the same window (frozen never contacts the upstream). Cached artifacts are ordinary package versions (tagged <code>upstream.cached</code>, shown as <span class="ui teal label">{{svg "octicon-cloud-download" 12}} proxied</span> in package lists) and are pruned by your
+				<strong>Freshness &amp; retention.</strong> Pull-through revalidates mutable metadata within the <em>TTL</em> window and negatively caches upstream 404s for the same window (frozen never contacts the upstream). Cached artifacts are ordinary package versions (tagged <code>upstream.cached</code>, shown as <span class="ui blue label">{{svg "octicon-cloud" 12}} proxied</span> in package lists) and are pruned by your
 				<a href="{{AppSubUrl}}/user/settings/packages">package cleanup rules</a> — tip: use a dedicated owner/org for proxied content so an age-based rule prunes only the cache, mirroring Nexus per-proxy policies.
 			</div>
 			{{if .Upstreams}}
