@@ -351,10 +351,10 @@ func ListPackageVersions(ctx *context.Context) {
 	ctx.Data["Title"] = ctx.Tr("packages.title")
 	ctx.Data["IsPackagesPage"] = true
 	ctx.Data["PackageDescriptor"] = &packages_model.PackageDescriptor{
-	ctx.Data["EnableUpstreamProxy"] = setting.Packages.EnableUpstreamProxy
 		Package: p,
 		Owner:   ctx.Package.Owner,
 	}
+	ctx.Data["EnableUpstreamProxy"] = setting.Packages.EnableUpstreamProxy
 	ctx.Data["Query"] = query
 	ctx.Data["Sort"] = sort
 
