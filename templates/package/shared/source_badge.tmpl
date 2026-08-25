@@ -1,9 +1,9 @@
-{{/* Distinguishes first-party (hosted) packages from ones cached via an upstream proxy.
+{{/* Distinguishes first-party (internal) packages from ones cached via an upstream proxy.
      Expects a PackageDescriptor as the dot ("."). Proxied versions carry the
      upstream.cached / upstream.source properties set by the pull-through proxy. */}}
 {{$src := .VersionProperties.GetByName "upstream.source"}}
 {{if .VersionProperties.GetByName "upstream.cached"}}
-<span class="ui teal label" data-tooltip-content="Cached from an upstream registry{{if $src}} ({{$src}}){{end}}">{{svg "octicon-cloud-download" 14}} proxied{{if $src}} · {{$src}}{{end}}</span>
+<span class="ui blue label" data-tooltip-content="Cached from an upstream registry{{if $src}} ({{$src}}){{end}}">{{svg "octicon-cloud-download" 14}} proxied{{if $src}} · {{$src}}{{end}}</span>
 {{else}}
-<span class="ui basic label" data-tooltip-content="First-party package published to this registry">{{svg "octicon-package" 14}} hosted</span>
+<span class="ui green label" data-tooltip-content="First-party image built and published internally">{{svg "octicon-verified" 14}} internal</span>
 {{end}}
