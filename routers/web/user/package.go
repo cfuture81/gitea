@@ -107,6 +107,7 @@ func ListPackages(ctx *context.Context) {
 	ctx.Data["AvailableTypes"] = packages_model.TypeList
 	ctx.Data["HasPackages"] = hasPackages
 	ctx.Data["PackageDescriptors"] = pds
+	ctx.Data["EnableUpstreamProxy"] = setting.Packages.EnableUpstreamProxy
 	ctx.Data["Total"] = total
 	ctx.Data["RepositoryAccessMap"] = repositoryAccessMap
 
@@ -198,6 +199,7 @@ func ViewPackageVersion(ctx *context.Context) {
 	ctx.Data["Title"] = pd.Package.Name
 	ctx.Data["IsPackagesPage"] = true
 	ctx.Data["PackageDescriptor"] = pd
+	ctx.Data["EnableUpstreamProxy"] = setting.Packages.EnableUpstreamProxy
 
 	registryHostURL, err := url.Parse(httplib.GuessCurrentHostURL(ctx))
 	if err != nil {
@@ -349,6 +351,7 @@ func ListPackageVersions(ctx *context.Context) {
 	ctx.Data["Title"] = ctx.Tr("packages.title")
 	ctx.Data["IsPackagesPage"] = true
 	ctx.Data["PackageDescriptor"] = &packages_model.PackageDescriptor{
+	ctx.Data["EnableUpstreamProxy"] = setting.Packages.EnableUpstreamProxy
 		Package: p,
 		Owner:   ctx.Package.Owner,
 	}
@@ -394,6 +397,7 @@ func ListPackageVersions(ctx *context.Context) {
 	}
 
 	ctx.Data["PackageDescriptors"], err = packages_model.GetPackageDescriptors(ctx, pvs)
+	ctx.Data["EnableUpstreamProxy"] = setting.Packages.EnableUpstreamProxy
 	if err != nil {
 		ctx.ServerError("GetPackageDescriptors", err)
 		return
@@ -420,6 +424,7 @@ func PackageSettings(ctx *context.Context) {
 	ctx.Data["Title"] = pd.Package.Name
 	ctx.Data["IsPackagesPage"] = true
 	ctx.Data["PackageDescriptor"] = pd
+	ctx.Data["EnableUpstreamProxy"] = setting.Packages.EnableUpstreamProxy
 	ctx.Data["CanWritePackages"] = ctx.Package.AccessMode >= perm.AccessModeWrite || ctx.IsUserSiteAdmin()
 
 	if pd.Package.RepoID > 0 {

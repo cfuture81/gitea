@@ -4,7 +4,7 @@
 		<h1 class="tw-mb-0">{{.PackageDescriptor.Package.Name}} ({{.PackageDescriptor.Version.Version}})</h1>
 		<span class="label-list">
 			{{template "package/shared/visibility_badge" dict "Package" .PackageDescriptor.Package "Owner" .PackageDescriptor.Owner}}
-			{{template "package/shared/source_badge" .PackageDescriptor}}
+			{{if $.EnableUpstreamProxy}}{{template "package/shared/source_badge" .PackageDescriptor}}{{end}}
 		</span>
 	</div>
 	<div>

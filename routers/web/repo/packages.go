@@ -61,6 +61,7 @@ func Packages(ctx *context.Context) {
 	ctx.Data["HasPackages"] = hasPackages
 	ctx.Data["CanWritePackages"] = ctx.Repo.Permission.CanWrite(unit.TypePackages) || ctx.IsUserSiteAdmin()
 	ctx.Data["PackageDescriptors"] = pds
+	ctx.Data["EnableUpstreamProxy"] = setting.Packages.EnableUpstreamProxy
 	ctx.Data["Total"] = total
 	ctx.Data["RepositoryAccessMap"] = map[int64]bool{ctx.Repo.Repository.ID: true} // There is only the current repository
 
