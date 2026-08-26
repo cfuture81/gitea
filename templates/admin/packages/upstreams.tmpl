@@ -1,0 +1,225 @@
+{{template "admin/layout_head" (dict "pageClass" "admin packages upstreams")}}
+	<div class="admin-setting-content">
+		<h4 class="ui top attached header tw-flex tw-items-center tw-justify-between">
+			<span>{{svg "octicon-cloud" 16}} {{ctx.Locale.Tr "admin.packages.upstreams.manage_panel"}}</span>
+			{{if .Upstreams}}<span class="ui small label">{{len .Upstreams}}</span>{{end}}
+		</h4>
+		<div class="ui attached segment">
+			<p>{{ctx.Locale.Tr "admin.packages.upstreams.desc"}}</p>
+		</div>
+		<div class="ui attached table segment">
+			<table class="ui very basic table unstackable">
+				<thead>
+					<tr>
+						<th>{{ctx.Locale.Tr "admin.packages.upstreams.target_owner"}}</th>
+						<th>{{ctx.Locale.Tr "admin.packages.type"}}</th>
+						<th>{{ctx.Locale.Tr "admin.packages.name"}}</th>
+						<th>{{ctx.Locale.Tr "admin.packages.upstreams.url"}}</th>
+						<th data-tooltip-content="{{ctx.Locale.Tr "admin.packages.upstreams.remote_prefix_desc"}}">{{ctx.Locale.Tr "admin.packages.upstreams.remote_prefix"}}</th>
+						<th>{{ctx.Locale.Tr "admin.packages.upstreams.mode"}}</th>
+						<th class="tw-text-center" data-tooltip-content="{{ctx.Locale.Tr "admin.packages.upstreams.priority_desc"}}">{{ctx.Locale.Tr "admin.packages.upstreams.priority"}}</th>
+						<th class="tw-text-center">{{ctx.Locale.Tr "admin.packages.upstreams.metadata_ttl"}}</th>
+						<th class="tw-text-center">{{ctx.Locale.Tr "enabled"}}</th>
+						<th class="tw-text-center" data-tooltip-content="{{ctx.Locale.Tr "admin.packages.upstreams.counters_desc"}}">{{ctx.Locale.Tr "admin.packages.upstreams.counters"}}</th>
+						<th>{{ctx.Locale.Tr "admin.packages.upstreams.pinned_tags"}}</th>
+						<th>{{ctx.Locale.Tr "admin.packages.upstreams.provenance"}}</th>
+						<th>{{ctx.Locale.Tr "admin.notices.op"}}</th>
+					</tr>
+				</thead>
+				<tbody>
+					{{range .Upstreams}}
+						{{/* TargetOwnerID is the admin-facing name for OwnerID; fall back for any row
+						     written before the target_owner_id backfill. */}}
+						{{$ownerID := .TargetOwnerID}}
+						{{if eq $ownerID 0}}{{$ownerID = .OwnerID}}{{end}}
+						{{$owner := ""}}
+						{{if $.UpstreamOwners}}{{$owner = index $.UpstreamOwners $ownerID}}{{end}}
+						<tr{{if not .Enabled}} class="tw-opacity-50"{{end}}>
+							<td>
+								{{if $owner}}
+									<a href="{{$owner.HomeLink}}">{{$owner.Name}}</a>
+									{{if $owner.Visibility.IsPrivate}}
+										<span class="tw-text-gold">{{svg "octicon-lock" 12}}</span>
+									{{end}}
+								{{else}}
+									{{/* The configured target owner no longer exists - a pull through this
+									     upstream cannot cache anywhere, so flag it instead of hiding it. */}}
+									<span class="ui red label" data-tooltip-content="{{ctx.Locale.Tr "admin.packages.upstreams.target_owner_not_found" $ownerID}}">{{svg "octicon-alert" 12}} #{{$ownerID}}</span>
+								{{end}}
+							</td>
+							<td><span class="ui basic label">{{.Type}}</span></td>
+							<td class="tw-font-semibold gt-ellipsis tw-max-w-48">{{.Name}}</td>
+							<td class="gt-ellipsis tw-max-w-48"><code>{{.URL}}</code></td>
+							<td>{{if .RemotePrefix}}<code>{{.RemotePrefix}}</code>{{else}}<span class="text grey">—</span>{{end}}</td>
+							<td>
+								{{if eq (printf "%s" .Mode) "frozen"}}
+									<span class="ui grey label">{{svg "octicon-lock" 12}} {{ctx.Locale.Tr "admin.packages.upstreams.mode.frozen"}}</span>
+								{{else}}
+									<span class="ui orange label">{{svg "octicon-sync" 12}} {{ctx.Locale.Tr "admin.packages.upstreams.mode.pull_through"}}</span>
+								{{end}}
+							</td>
+							<td class="tw-text-center">{{.Priority}}</td>
+							<td class="tw-text-center">{{.MetadataTTL}}s</td>
+							<td class="tw-text-center">
+								{{if .Enabled}}
+									<span class="text green" data-tooltip-content="{{ctx.Locale.Tr "enabled"}}">{{svg "octicon-check-circle-fill" 16}}</span>
+								{{else}}
+									<span class="text grey" data-tooltip-content="{{ctx.Locale.Tr "disabled"}}">{{svg "octicon-circle-slash" 16}}</span>
+								{{end}}
+							</td>
+							<td class="tw-text-center tw-whitespace-nowrap">{{.FetchCount}} / {{.HitCount}}</td>
+							<td>
+								{{if .PinnedTags}}
+									{{range .PinnedTags}}<span class="ui small label"><code>{{.Image}}:{{.Tag}}</code> &rarr; <strong>{{.Target}}</strong></span>{{end}}
+								{{else}}
+									<span class="text grey">—</span>
+								{{end}}
+							</td>
+							<td>
+								{{if .IsAdminManaged}}
+									<span class="ui green label">{{svg "octicon-shield-check" 12}} {{ctx.Locale.Tr "admin.packages.upstreams.admin_managed"}}</span>
+								{{else}}
+									<span class="ui yellow label">{{svg "octicon-person" 12}} {{ctx.Locale.Tr "admin.packages.upstreams.owner_managed"}}</span>
+								{{end}}
+							</td>
+							<td class="right aligned tw-whitespace-nowrap">
+								<a class="ui tiny button" href="{{$.UpstreamsLink}}?id={{.ID}}#upstream-form">{{svg "octicon-pencil" 12}} {{ctx.Locale.Tr "edit"}}</a>
+								<a class="ui tiny red button show-modal" href data-modal="#admin-upstream-delete-modal"
+									data-modal-form.url="{{$.UpstreamsLink}}/{{.ID}}/delete"
+									data-modal-upstream-name="{{.Name}}"
+								>{{svg "octicon-trash" 12}} {{ctx.Locale.Tr "remove"}}</a>
+							</td>
+						</tr>
+					{{else}}
+						<tr>
+							<td class="tw-text-center" colspan="13">
+								<div class="empty-placeholder tw-py-4">
+									{{svg "octicon-package-dependencies" 36}}
+									<p>{{ctx.Locale.Tr "admin.packages.upstreams.none"}}</p>
+								</div>
+							</td>
+						</tr>
+					{{end}}
+				</tbody>
+			</table>
+		</div>
+
+		{{$e := .EditUpstream}}
+		<h4 class="ui top attached header" id="upstream-form">
+			{{if $e}}
+				{{svg "octicon-pencil" 16}} {{ctx.Locale.Tr "admin.packages.upstreams.edit"}} <code>{{$e.Name}}</code>
+			{{else}}
+				{{svg "octicon-plus" 16}} {{ctx.Locale.Tr "admin.packages.upstreams.add"}}
+			{{end}}
+		</h4>
+		<div class="ui attached segment">
+			<form class="ui form" method="post" action="{{if $e}}{{.UpstreamsLink}}/{{$e.ID}}{{else}}{{.UpstreamsLink}}{{end}}">
+				<div class="two fields">
+					<div class="required field">
+						<label>{{ctx.Locale.Tr "admin.packages.upstreams.target_owner"}}</label>
+						<select name="target_owner_id" required>
+							<option value=""></option>
+							{{range .AvailableOwners}}
+								<option value="{{.ID}}"{{if and $e (eq $e.TargetOwnerID .ID)}} selected{{end}}>{{.Name}}</option>
+							{{end}}
+						</select>
+						<p class="help">{{ctx.Locale.Tr "admin.packages.upstreams.target_owner_desc"}}</p>
+					</div>
+					<div class="required field">
+						<label>{{ctx.Locale.Tr "admin.packages.type"}}</label>
+						{{if $e}}
+							{{/* The type is part of the (owner, type, name) identity - not editable. */}}
+							<select disabled>
+								<option selected>{{$e.Type}}</option>
+							</select>
+							<input type="hidden" name="type" value="{{$e.Type}}">
+						{{else}}
+							<select name="type">
+								<option value="maven">maven</option>
+								<option value="container">container</option>
+								<option value="npm">npm</option>
+								<option value="pypi">pypi</option>
+							</select>
+						{{end}}
+					</div>
+				</div>
+				<div class="two fields">
+					<div class="required field">
+						<label>{{ctx.Locale.Tr "admin.packages.name"}}</label>
+						<input name="name" value="{{if $e}}{{$e.Name}}{{end}}" placeholder="dockerhub" required>
+					</div>
+					<div class="field">
+						<label>{{ctx.Locale.Tr "admin.packages.upstreams.remote_prefix"}}</label>
+						<input name="remote_prefix" value="{{if $e}}{{$e.RemotePrefix}}{{end}}" placeholder="library">
+						<p class="help">{{ctx.Locale.Tr "admin.packages.upstreams.remote_prefix_desc"}}</p>
+					</div>
+				</div>
+				<div class="required field">
+					<label>{{ctx.Locale.Tr "admin.packages.upstreams.url"}}</label>
+					<input name="url" value="{{if $e}}{{$e.URL}}{{end}}" placeholder="https://registry-1.docker.io" required>
+				</div>
+				<div class="three fields">
+					<div class="field">
+						<label>{{ctx.Locale.Tr "admin.packages.upstreams.mode"}}</label>
+						<select name="mode">
+							<option value="pull_through"{{if and $e (eq (printf "%s" $e.Mode) "pull_through")}} selected{{end}}>{{ctx.Locale.Tr "admin.packages.upstreams.mode.pull_through"}}</option>
+							<option value="frozen"{{if and $e (eq (printf "%s" $e.Mode) "frozen")}} selected{{end}}>{{ctx.Locale.Tr "admin.packages.upstreams.mode.frozen"}}</option>
+						</select>
+					</div>
+					<div class="field">
+						<label>{{ctx.Locale.Tr "admin.packages.upstreams.metadata_ttl"}}</label>
+						<input name="metadata_ttl" type="number" min="1" value="{{if $e}}{{$e.MetadataTTL}}{{else}}900{{end}}">
+					</div>
+					<div class="field">
+						<label>{{ctx.Locale.Tr "admin.packages.upstreams.priority"}}</label>
+						<input name="priority" type="number" min="1" value="{{if $e}}{{$e.Priority}}{{else}}100{{end}}">
+						<p class="help">{{ctx.Locale.Tr "admin.packages.upstreams.priority_desc"}}</p>
+					</div>
+				</div>
+				<div class="three fields">
+					<div class="field">
+						<label>{{ctx.Locale.Tr "admin.packages.upstreams.auth_type"}}</label>
+						<select name="auth_type">
+							<option value="none"{{if and $e (eq (printf "%s" $e.AuthType) "none")}} selected{{end}}>{{ctx.Locale.Tr "admin.packages.upstreams.auth_type.none"}}</option>
+							<option value="basic"{{if and $e (eq (printf "%s" $e.AuthType) "basic")}} selected{{end}}>{{ctx.Locale.Tr "admin.packages.upstreams.auth_type.basic"}}</option>
+							<option value="token"{{if and $e (eq (printf "%s" $e.AuthType) "token")}} selected{{end}}>{{ctx.Locale.Tr "admin.packages.upstreams.auth_type.token"}}</option>
+						</select>
+					</div>
+					<div class="field">
+						<label>{{ctx.Locale.Tr "admin.packages.upstreams.auth_username"}}</label>
+						<input name="auth_username" value="{{if $e}}{{$e.AuthUsername}}{{end}}" autocomplete="off">
+					</div>
+					<div class="field">
+						<label>{{ctx.Locale.Tr "admin.packages.upstreams.auth_secret"}}</label>
+						<input name="auth_secret" type="password" autocomplete="new-password">
+						{{if $e}}<p class="help">{{ctx.Locale.Tr "admin.packages.upstreams.auth_secret_keep"}}</p>{{end}}
+					</div>
+				</div>
+				<div class="field">
+					<label class="gt-checkbox">
+						<input type="checkbox" name="enabled" value="true"{{if or (not $e) $e.Enabled}} checked{{end}}> {{ctx.Locale.Tr "enabled"}}
+					</label>
+				</div>
+				<div class="field">
+					<label>{{ctx.Locale.Tr "admin.packages.upstreams.pinned_tags"}}</label>
+					<textarea name="pinned_tags" rows="4" placeholder='[{"image":"library/mongo","tag":"latest","target":"4.4"}]'>{{if .EditPinnedTagsJSON}}{{.EditPinnedTagsJSON}}{{end}}</textarea>
+					<p class="help">{{ctx.Locale.Tr "admin.packages.upstreams.pinned_tags_desc"}}</p>
+				</div>
+				<div class="field">
+					<button class="ui primary button">{{if $e}}{{ctx.Locale.Tr "save"}}{{else}}{{ctx.Locale.Tr "admin.packages.upstreams.add"}}{{end}}</button>
+					{{if $e}}<a class="ui button" href="{{.UpstreamsLink}}">{{ctx.Locale.Tr "cancel"}}</a>{{end}}
+				</div>
+			</form>
+		</div>
+	</div>
+
+<form class="ui small modal" method="post" id="admin-upstream-delete-modal">
+	<div class="header">{{svg "octicon-trash"}} {{ctx.Locale.Tr "admin.packages.upstreams.delete"}}</div>
+	<div class="content">
+		<p>{{ctx.Locale.Tr "admin.packages.upstreams.delete_desc"}}</p>
+		<p><strong class="upstream-name"></strong></p>
+	</div>
+	{{template "base/modal_actions_confirm" .}}
+</form>
+
+{{template "admin/layout_footer" .}}

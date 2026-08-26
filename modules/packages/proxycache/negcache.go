@@ -7,6 +7,7 @@
 package proxycache
 
 import (
+	"strings"
 	"sync"
 	"time"
 )
@@ -46,6 +47,28 @@ func Block(key string, ttl time.Duration) {
 			if now.After(exp) {
 				delete(blocked, k)
 			}
+		}
+	}
+}
+
+// Clear removes the negative-cache entry for key so the next lookup is no longer suppressed.
+// It is a no-op when key is not cached. Used when locally cached content is deleted and a fresh
+// upstream fetch must be allowed before the original ttl elapses.
+func Clear(key string) {
+	mu.Lock()
+	defer mu.Unlock()
+	delete(blocked, key)
+}
+
+// ClearPrefix removes every negative-cache entry whose key starts with prefix, unblocking all
+// entries cached under it (e.g. "<upstreamID>|<image>|" clears every reference of that
+// upstream+image). An empty prefix clears the whole cache.
+func ClearPrefix(prefix string) {
+	mu.Lock()
+	defer mu.Unlock()
+	for k := range blocked {
+		if strings.HasPrefix(k, prefix) {
+			delete(blocked, k)
 		}
 	}
 }

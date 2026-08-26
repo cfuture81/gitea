@@ -96,12 +96,27 @@ func DownloadPackageFile(ctx *context.Context) {
 	filename := ctx.PathParam("filename")
 
 	ups := getEnabledNpmUpstreams(ctx)
-	info := &packages_service.PackageInfo{Owner: ctx.Package.Owner, PackageType: packages_model.TypeNpm, Name: packageName, Version: packageVersion}
-	finfo := &packages_service.PackageFileInfo{Filename: filename}
-
-	s, u, pf, err := packages_service.OpenFileForDownloadByPackageNameAndVersion(ctx, info, finfo, ctx.Req.Method)
 	proxied := false
+
+	s, u, pf, err := packages_service.OpenFileForDownloadByPackageNameAndVersion(
+		ctx,
+		&packages_service.PackageInfo{
+			Owner:       ctx.Package.Owner,
+			PackageType: packages_model.TypeNpm,
+			Name:        packageName,
+			Version:     packageVersion,
+		},
+		&packages_service.PackageFileInfo{
+			Filename: filename,
+		},
+		ctx.Req.Method,
+	)
+	// Local miss: try each pull_through upstream in order, then retry the local serve. The call
+	// above is upstream's, left untouched on purpose (FORK-MAINTENANCE.md rule 4); the retry
+	// rebuilds its arguments here rather than hoisting them out of it.
 	if errors.Is(err, packages_model.ErrPackageNotExist) || errors.Is(err, packages_model.ErrPackageFileNotExist) {
+		info := &packages_service.PackageInfo{Owner: ctx.Package.Owner, PackageType: packages_model.TypeNpm, Name: packageName, Version: packageVersion}
+		finfo := &packages_service.PackageFileInfo{Filename: filename}
 		for _, up := range ups {
 			if up.Mode != packages_model.UpstreamModePullThrough {
 				continue
@@ -122,35 +137,46 @@ func DownloadPackageFile(ctx *context.Context) {
 		apiError(ctx, http.StatusInternalServerError, err)
 		return
 	}
+
 	if !proxied {
 		countNpmHit(ctx, ups)
 	}
+
 	helper.ServePackageFile(ctx, s, u, pf)
 }
 
 // DownloadPackageFileByName finds the version and serves the contents of a package
 func DownloadPackageFileByName(ctx *context.Context) {
 	filename := ctx.PathParam("filename")
-	packageName := packageNameFromParams(ctx)
-	ups := getEnabledNpmUpstreams(ctx)
 
-	searchOpts := &packages_model.PackageSearchOptions{
+	ups := getEnabledNpmUpstreams(ctx)
+	proxied := false
+
+	pvs, _, err := packages_model.SearchVersions(ctx, &packages_model.PackageSearchOptions{
 		OwnerID: ctx.Package.Owner.ID,
 		Type:    packages_model.TypeNpm,
 		Name: packages_model.SearchValue{
 			ExactMatch: true,
-			Value:      packageName,
+			Value:      packageNameFromParams(ctx),
 		},
 		HasFileWithName: filename,
 		IsInternal:      optional.Some(false),
-	}
-	pvs, _, err := packages_model.SearchVersions(ctx, searchOpts)
-	if err != nil {
-		apiError(ctx, http.StatusInternalServerError, err)
-		return
-	}
-	proxied := false
-	if len(pvs) != 1 {
+	})
+	// Local miss: try each pull_through upstream in order, then retry the local search. The
+	// search above is upstream's, left untouched on purpose (FORK-MAINTENANCE.md rule 4); the
+	// retry rebuilds its options here rather than hoisting them out of it.
+	if err == nil && len(pvs) != 1 {
+		packageName := packageNameFromParams(ctx)
+		searchOpts := &packages_model.PackageSearchOptions{
+			OwnerID: ctx.Package.Owner.ID,
+			Type:    packages_model.TypeNpm,
+			Name: packages_model.SearchValue{
+				ExactMatch: true,
+				Value:      packageName,
+			},
+			HasFileWithName: filename,
+			IsInternal:      optional.Some(false),
+		}
 		for _, up := range ups {
 			if up.Mode != packages_model.UpstreamModePullThrough {
 				continue
@@ -171,6 +197,7 @@ func DownloadPackageFileByName(ctx *context.Context) {
 		apiError(ctx, http.StatusNotFound, nil)
 		return
 	}
+
 	if !proxied {
 		countNpmHit(ctx, ups)
 	}

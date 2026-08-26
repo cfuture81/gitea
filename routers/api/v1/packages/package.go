@@ -183,7 +183,7 @@ func DeletePackageVersion(ctx *context.APIContext) {
 	//   "404":
 	//     "$ref": "#/responses/notFound"
 
-	err := packages_service.RemovePackageVersion(ctx, ctx.Doer, ctx.Package.Descriptor.Version)
+	err := packages_service.RemoveProxiedVersionAndOrphans(ctx, ctx.Doer, ctx.Package.Descriptor.Version)
 	if err != nil {
 		ctx.APIErrorInternal(err)
 		return

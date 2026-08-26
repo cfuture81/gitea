@@ -515,7 +515,7 @@ func PackageVersionDelete(ctx *context.Context) {
 		return
 	}
 
-	if err := packages_service.RemovePackageVersion(ctx, ctx.Doer, pd.Version); err != nil {
+	if err := packages_service.RemoveProxiedVersionAndOrphans(ctx, ctx.Doer, pd.Version); err != nil {
 		errTr := util.ErrorAsTranslatable(err)
 		if errTr == nil {
 			ctx.ServerError("RemovePackageVersion", err)

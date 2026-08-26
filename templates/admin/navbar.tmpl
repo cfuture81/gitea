@@ -37,9 +37,14 @@
 			<summary>{{ctx.Locale.Tr "admin.assets"}}</summary>
 			<div class="menu">
 				{{if .EnablePackages}}
-					<a class="{{if .PageIsAdminPackages}}active {{end}}item" href="{{AppSubUrl}}/-/admin/packages">
+					<a class="{{if and .PageIsAdminPackages (not .PageIsAdminPackagesUpstreams)}}active {{end}}item" href="{{AppSubUrl}}/-/admin/packages">
 						{{ctx.Locale.Tr "packages.title"}}
 					</a>
+					{{if .EnableUpstreamProxy}}
+						<a class="{{if .PageIsAdminPackagesUpstreams}}active {{end}}item" href="{{AppSubUrl}}/-/admin/packages/upstreams">
+							{{ctx.Locale.Tr "admin.packages.upstreams"}}
+						</a>
+					{{end}}
 				{{end}}
 				<a class="{{if .PageIsAdminRepositories}}active {{end}}item" href="{{AppSubUrl}}/-/admin/repos">
 					{{ctx.Locale.Tr "admin.repositories"}}

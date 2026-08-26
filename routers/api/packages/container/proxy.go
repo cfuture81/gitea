@@ -15,6 +15,7 @@ import (
 
 	packages_model "gitea.dev/models/packages"
 	container_model "gitea.dev/models/packages/container"
+	user_model "gitea.dev/models/user"
 	"gitea.dev/modules/globallock"
 	"gitea.dev/modules/json"
 	"gitea.dev/modules/log"
@@ -51,6 +52,42 @@ func getEnabledContainerUpstreams(ctx *context.Context) []*packages_model.Packag
 		return nil
 	}
 	return ups
+}
+
+// upstreamTargetOwnerID returns the owner a fetch through up must be cached under. Rows written
+// before the target_owner_id backfill can still carry 0, which means "unset" - the scoping OwnerID
+// is the target owner in that case.
+func upstreamTargetOwnerID(up *packages_model.PackageRegistryUpstream) int64 {
+	if up.TargetOwnerID != 0 {
+		return up.TargetOwnerID
+	}
+	return up.OwnerID
+}
+
+// checkUpstreamTargetOwner reports whether up's Target_Owner - the owner the fetched package would
+// be created under - still exists. A false result aborts the proxy fetch, so the request falls
+// through to the standard local-miss 404 instead of caching into a dangling owner (R2.5).
+//
+// This is an invariant guard, not a hot-path check. The model keeps TargetOwnerID == OwnerID
+// (normalizeTargetOwner) and the proxy resolves upstreams by ctx.Package.Owner.ID, so on this path
+// the target owner IS the owner the request already resolved to and therefore demonstrably exists -
+// that case is a plain id comparison and issues no query. The lookup only runs when the two
+// diverge, which the model forbids and only a direct database edit (or a future resolver that no
+// longer scopes by the target owner) can produce. Keeping it here means such a divergence aborts
+// the fetch with a named error instead of silently caching content under the wrong owner.
+func checkUpstreamTargetOwner(ctx *context.Context, up *packages_model.PackageRegistryUpstream, image, reference string) bool {
+	targetOwnerID := upstreamTargetOwnerID(up)
+	if targetOwnerID == ctx.Package.Owner.ID {
+		return true
+	}
+	if _, err := user_model.GetUserByID(ctx, targetOwnerID); err != nil {
+		log.Error("container proxy: aborting fetch of %s:%s - upstream %q (id %d) targets owner id %d, which does not exist: %v",
+			image, reference, up.Name, up.ID, targetOwnerID, err)
+		return false
+	}
+	log.Error("container proxy: aborting fetch of %s:%s - upstream %q (id %d) targets owner id %d but the request resolved to owner id %d; caching here would place the package under the wrong owner",
+		image, reference, up.Name, up.ID, targetOwnerID, ctx.Package.Owner.ID)
+	return false
 }
 
 // countContainerUpstreamHit increments the served-from-cache counter (observability).
@@ -96,6 +133,9 @@ func proxyEnsureManifest(ctx *context.Context, up *packages_model.PackageRegistr
 	if up == nil || up.Mode != packages_model.UpstreamModePullThrough {
 		return false
 	}
+	if !checkUpstreamTargetOwner(ctx, up, image, reference) {
+		return false
+	}
 
 	releaser, err := globallock.Lock(ctx, "container_proxy_"+strconv.FormatInt(up.OwnerID, 10)+"_"+strings.ToLower(image)+"_"+reference)
 	if err != nil {
@@ -127,11 +167,9 @@ func proxyEnsureManifest(ctx *context.Context, up *packages_model.PackageRegistr
 	if err := packages_model.IncrUpstreamFetchCount(ctx, up.ID); err != nil {
 		log.Error("container proxy: incr fetch count: %v", err)
 	}
-	if pv, err := packages_model.GetVersionByNameAndVersion(ctx, ctx.Package.Owner.ID, packages_model.TypeContainer, strings.ToLower(image), strings.ToLower(reference)); err == nil {
-		if err := packages_model.TagVersionCached(ctx, pv.ID, up.Name); err != nil {
-			log.Error("container proxy: tag cached: %v", err)
-		}
-	}
+	// The cached-tagging (upstream.cached / upstream.source) happens per stored version inside
+	// storeManifest, which covers this tagged reference AND every per-arch sub-manifest of a
+	// multi-arch index - so it is deliberately not repeated here.
 	log.Info("container proxy: cached manifest %s:%s from upstream %q (owner %d)", image, reference, up.URL, up.OwnerID)
 	return manifestExistsLocally(ctx, image, reference)
 }
@@ -140,6 +178,9 @@ func proxyEnsureManifest(ctx *context.Context, up *packages_model.PackageRegistr
 // manifest pull already stores referenced blobs). Returns true if available locally afterwards.
 func proxyEnsureBlob(ctx *context.Context, up *packages_model.PackageRegistryUpstream, image, dgst string) bool {
 	if up == nil || up.Mode != packages_model.UpstreamModePullThrough {
+		return false
+	}
+	if !checkUpstreamTargetOwner(ctx, up, image, dgst) {
 		return false
 	}
 
@@ -176,6 +217,15 @@ func newUpstreamClient(up *packages_model.PackageRegistryUpstream) *upstreamClie
 	base := strings.TrimSuffix(strings.TrimSpace(up.URL), "/")
 	base = strings.TrimSuffix(base, "/v2")
 	return &upstreamClient{up: up, base: base, tokens: make(map[string]string)}
+}
+
+// remoteAddr maps a local image name to the address it is requested under on the upstream,
+// prepending the upstream's RemotePrefix when one is configured (e.g. image "nats" with prefix
+// "noenv" is fetched as "noenv/nats"). It affects the OUTBOUND request only - the /v2/<addr>/...
+// URL and the matching Bearer scope - never local storage, which stays flat under
+// ctx.Package.Owner with the unprefixed image as the package name.
+func (c *upstreamClient) remoteAddr(image string) string {
+	return c.up.UpstreamAddr(image)
 }
 
 func (c *upstreamClient) get(ctx *context.Context, urlStr, accept, scope string) (*http.Response, error) {
@@ -290,8 +340,9 @@ func parseBearerChallenge(h string) (realm, service, scope string) {
 }
 
 func (c *upstreamClient) fetchAndStoreManifest(ctx *context.Context, image, upstreamRef, storeRef string) bool {
-	scope := "repository:" + image + ":pull"
-	urlStr := c.base + "/v2/" + image + "/manifests/" + upstreamRef
+	addr := c.remoteAddr(image)
+	scope := "repository:" + addr + ":pull"
+	urlStr := c.base + "/v2/" + addr + "/manifests/" + upstreamRef
 	resp, err := c.get(ctx, urlStr, manifestAcceptHeader, scope)
 	if err != nil {
 		log.Error("container proxy: manifest request failed: %v", err)
@@ -299,7 +350,7 @@ func (c *upstreamClient) fetchAndStoreManifest(ctx *context.Context, image, upst
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		log.Warn("container proxy: upstream manifest %s:%s status %d", image, upstreamRef, resp.StatusCode)
+		log.Warn("container proxy: upstream manifest %s:%s status %d", addr, upstreamRef, resp.StatusCode)
 		return false
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxManifestSize))
@@ -372,7 +423,25 @@ func (c *upstreamClient) storeManifest(ctx *context.Context, image, reference, m
 		log.Error("container proxy: store manifest %s:%s: %v", image, reference, err)
 		return false
 	}
+	c.tagCached(ctx, image, reference)
 	return true
+}
+
+// tagCached marks the version just written by storeManifest as proxy cache content
+// (upstream.cached + upstream.source = the upstream's name). Because it runs for every stored
+// manifest, it covers both the tagged index reference and each per-arch sub-manifest stored under
+// its digest - a multi-arch pull therefore leaves no child version that renders as first-party
+// (internal) content. Best-effort: the manifest is already stored and servable at this point, so a
+// property write failure is logged and never fails the pull.
+func (c *upstreamClient) tagCached(ctx *context.Context, image, reference string) {
+	pv, err := packages_model.GetVersionByNameAndVersion(ctx, ctx.Package.Owner.ID, packages_model.TypeContainer, strings.ToLower(image), strings.ToLower(reference))
+	if err != nil {
+		log.Error("container proxy: resolve cached version %s:%s: %v", image, reference, err)
+		return
+	}
+	if err := packages_model.TagVersionCached(ctx, pv.ID, c.up.Name); err != nil {
+		log.Error("container proxy: tag cached %s:%s: %v", image, reference, err)
+	}
 }
 
 func (c *upstreamClient) ensureBlob(ctx *context.Context, image, dgst string) bool {
@@ -380,8 +449,9 @@ func (c *upstreamClient) ensureBlob(ctx *context.Context, image, dgst string) bo
 		return true
 	}
 
-	scope := "repository:" + image + ":pull"
-	urlStr := c.base + "/v2/" + image + "/blobs/" + dgst
+	addr := c.remoteAddr(image)
+	scope := "repository:" + addr + ":pull"
+	urlStr := c.base + "/v2/" + addr + "/blobs/" + dgst
 	resp, err := c.get(ctx, urlStr, "", scope)
 	if err != nil {
 		log.Error("container proxy: blob request failed: %v", err)
@@ -418,6 +488,23 @@ func (c *upstreamClient) ensureBlob(ctx *context.Context, image, dgst string) bo
 // getManifestFromContextOrProxy returns a cached manifest, counting a cache hit when found, or
 // (in pull_through mode) fetches it from the upstream on a miss and returns the freshly cached
 // manifest. Frozen mode never contacts the upstream and simply misses.
+//
+// RESOLUTION INVARIANT (do not reorder - see below):
+//
+//  1. Local first. getManifestFromContext is consulted before any upstream. A locally present
+//     manifest - whether first-party (hosted) or previously cached by this proxy - is served
+//     without contacting any upstream at all.
+//  2. On a local miss (ErrContainerBlobNotExist only), the enabled upstreams for the owner are
+//     tried in the order returned by GetEnabledUpstreamsByOwnerAndType, i.e. priority ASC, id ASC.
+//  3. First match wins: the loop returns as soon as one upstream yields the manifest; later
+//     upstreams are not consulted.
+//
+// This is what makes one org behave like a Nexus docker-group: a single org endpoint blends hosted
+// and pull-through-cached images, and a hosted image ALWAYS shadows a same-named upstream image.
+// Reordering these steps so an upstream were consulted before the local lookup would let a public
+// image silently shadow a first-party image of the same name - a supply-chain-shaped failure. Keep
+// the local lookup ahead of the upstream loop across any rebase; the same invariant is recorded in
+// the fork notes (FORK-MAINTENANCE.md).
 func getManifestFromContextOrProxy(ctx *context.Context) (*packages_model.PackageFileDescriptor, error) {
 	ups := getEnabledContainerUpstreams(ctx)
 	var first *packages_model.PackageRegistryUpstream
@@ -445,6 +532,11 @@ func getManifestFromContextOrProxy(ctx *context.Context) (*packages_model.Packag
 }
 
 // getBlobFromContextOrProxy mirrors getManifestFromContextOrProxy for blobs (config/layer digests).
+//
+// It upholds the same RESOLUTION INVARIANT: local blob first (hosted or previously cached, served
+// without contacting any upstream), then on a local miss the enabled upstreams in priority ASC,
+// id ASC order, first match wins. Do not move the upstream loop ahead of getBlobFromContext on a
+// rebase - see the invariant note on getManifestFromContextOrProxy and FORK-MAINTENANCE.md.
 func getBlobFromContextOrProxy(ctx *context.Context) (*packages_model.PackageFileDescriptor, error) {
 	ups := getEnabledContainerUpstreams(ctx)
 	var first *packages_model.PackageRegistryUpstream

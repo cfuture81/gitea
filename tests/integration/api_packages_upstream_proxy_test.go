@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -417,4 +418,108 @@ func TestPackageUpstreamProxyContainer(t *testing.T) {
 		req = NewRequest(t, "GET", url+"/manifests/1.0").AddTokenAuth(userToken).SetHeader("Accept", mediaType)
 		MakeRequest(t, req, http.StatusOK)
 	})
+}
+
+// TestPackageUpstreamProxyContainerMultiArchCached pulls a multi-arch image (an OCI index with two
+// per-arch sub-manifests) through the proxy and asserts that EVERY version the pull creates - the
+// tagged index and both per-arch children stored under their digest - carries the
+// upstream.cached / upstream.source properties. Without that, residual/re-pulled sub-manifests
+// render as first-party "internal" content in the package UI.
+func TestPackageUpstreamProxyContainerMultiArchCached(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+	defer test.MockVariableValue(&setting.Packages.EnableUpstreamProxy, true)()
+	user := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
+
+	sha := func(b []byte) string { s := sha256.Sum256(b); return "sha256:" + hex.EncodeToString(s[:]) }
+
+	const manifestMediaType = "application/vnd.oci.image.manifest.v1+json"
+	const indexMediaType = "application/vnd.oci.image.index.v1+json"
+
+	// one config+layer blob pair and one image manifest per architecture
+	type archImage struct {
+		arch     string
+		config   []byte
+		layer    []byte
+		manifest []byte
+	}
+	arches := []*archImage{{arch: "amd64"}, {arch: "arm64"}}
+	blobs := map[string][]byte{}
+	children := map[string][]byte{} // child manifest digest -> manifest body
+	for _, ai := range arches {
+		ai.config = []byte(`{"architecture":"` + ai.arch + `","os":"linux","rootfs":{"type":"layers","diff_ids":[]}}`)
+		ai.layer = []byte("fake-layer-bytes-" + ai.arch)
+		ai.manifest = []byte(fmt.Sprintf(`{"schemaVersion":2,"mediaType":%q,"config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":%q,"size":%d},"layers":[{"mediaType":"application/vnd.oci.image.layer.v1.tar+gzip","digest":%q,"size":%d}]}`,
+			manifestMediaType, sha(ai.config), len(ai.config), sha(ai.layer), len(ai.layer)))
+		blobs[sha(ai.config)] = ai.config
+		blobs[sha(ai.layer)] = ai.layer
+		children[sha(ai.manifest)] = ai.manifest
+	}
+	index := []byte(fmt.Sprintf(`{"schemaVersion":2,"mediaType":%q,"manifests":[{"mediaType":%q,"digest":%q,"size":%d,"platform":{"architecture":"amd64","os":"linux"}},{"mediaType":%q,"digest":%q,"size":%d,"platform":{"architecture":"arm64","os":"linux"}}]}`,
+		indexMediaType,
+		manifestMediaType, sha(arches[0].manifest), len(arches[0].manifest),
+		manifestMediaType, sha(arches[1].manifest), len(arches[1].manifest)))
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if ref, ok := strings.CutPrefix(r.URL.Path, "/v2/multi/manifests/"); ok {
+			if ref == "1.0" {
+				w.Header().Set("Content-Type", indexMediaType)
+				_, _ = w.Write(index)
+				return
+			}
+			if body, ok := children[ref]; ok {
+				w.Header().Set("Content-Type", manifestMediaType)
+				_, _ = w.Write(body)
+				return
+			}
+		}
+		if dgst, ok := strings.CutPrefix(r.URL.Path, "/v2/multi/blobs/"); ok {
+			if body, ok := blobs[dgst]; ok {
+				_, _ = w.Write(body)
+				return
+			}
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	_, err := packages_model.InsertUpstream(t.Context(), &packages_model.PackageRegistryUpstream{
+		OwnerID: user.ID, Type: packages_model.TypeContainer, Name: "dockerhub", URL: ts.URL,
+		Mode: packages_model.UpstreamModePullThrough, AuthType: packages_model.UpstreamAuthNone,
+		MetadataTTL: 900, Enabled: true, Priority: 100,
+	})
+	require.NoError(t, err)
+
+	var tok struct {
+		Token string `json:"token"`
+	}
+	resp := MakeRequest(t, NewRequest(t, "GET", setting.AppURL+"v2/token").AddBasicAuth(user.Name), http.StatusOK)
+	DecodeJSON(t, resp, &tok)
+	userToken := "Bearer " + tok.Token
+
+	req := NewRequest(t, "GET", setting.AppURL+"v2/user2/multi/manifests/1.0").
+		AddTokenAuth(userToken).SetHeader("Accept", indexMediaType)
+	resp = MakeRequest(t, req, http.StatusOK)
+	assert.Equal(t, index, resp.Body.Bytes())
+
+	// the tagged index AND every per-arch child must be marked as proxied cache content
+	refs := []string{"1.0"}
+	for d := range children {
+		refs = append(refs, d)
+	}
+	for _, ref := range refs {
+		t.Run("Cached_"+ref, func(t *testing.T) {
+			pv, err := packages_model.GetVersionByNameAndVersion(t.Context(), user.ID, packages_model.TypeContainer, "multi", strings.ToLower(ref))
+			require.NoError(t, err, "version %q must exist after the multi-arch pull", ref)
+
+			cached, err := packages_model.GetPropertiesByName(t.Context(), packages_model.PropertyTypeVersion, pv.ID, packages_model.PropertyUpstreamCached)
+			require.NoError(t, err)
+			require.Len(t, cached, 1, "version %q must carry exactly one %s property", ref, packages_model.PropertyUpstreamCached)
+			assert.Equal(t, "1", cached[0].Value)
+
+			source, err := packages_model.GetPropertiesByName(t.Context(), packages_model.PropertyTypeVersion, pv.ID, packages_model.PropertyUpstreamSource)
+			require.NoError(t, err)
+			require.Len(t, source, 1, "version %q must carry exactly one %s property", ref, packages_model.PropertyUpstreamSource)
+			assert.Equal(t, "dockerhub", source[0].Value)
+		})
+	}
 }

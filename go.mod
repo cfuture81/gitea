@@ -69,6 +69,7 @@ require (
 	github.com/jhillyerd/enmime/v2 v2.4.1
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
 	github.com/klauspost/compress v1.19.2
+	github.com/leanovate/gopter v0.2.11
 	github.com/lib/pq v1.12.3
 	github.com/markbates/goth v1.82.0
 	github.com/mattn/go-isatty v0.0.24

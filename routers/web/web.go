@@ -696,12 +696,6 @@ func registerWebRoutes(m *web.Router, webAuth *AuthMiddleware) {
 		m.Post("/keys/delete", user_setting.DeleteKey)
 		m.Group("/packages", func() {
 			m.Get("", user_setting.Packages)
-			m.Group("/upstreams", func() {
-				m.Get("", user_setting.UpstreamProxies)
-				m.Post("", user_setting.UpstreamProxiesPost)
-				m.Post("/{id}", user_setting.UpstreamProxiesEditPost)
-				m.Post("/{id}/delete", user_setting.UpstreamProxiesDelete)
-			})
 			m.Group("/rules", func() {
 				m.Group("/add", func() {
 					m.Get("", user_setting.PackagesRuleAdd)
@@ -851,6 +845,18 @@ func registerWebRoutes(m *web.Router, webAuth *AuthMiddleware) {
 			m.Post("/cleanup", admin.CleanupExpiredData)
 		}, packagesEnabled)
 
+		// Registry upstream proxy: site-admin configuration surface. Registered inside the
+		// "/-/admin" group so adminReq applies. Guarded by the feature flag at registration time,
+		// so with the flag off these routes do not exist at all (404, not 403).
+		if setting.Packages.EnableUpstreamProxy {
+			m.Group("/packages/upstreams", func() {
+				m.Get("", admin.PackagesUpstreams)
+				m.Post("", admin.PackagesUpstreamsPost)
+				m.Post("/{id}", admin.PackagesUpstreamsEditPost)
+				m.Post("/{id}/delete", admin.PackagesUpstreamsDelete)
+			}, packagesEnabled)
+		}
+
 		m.Group("/hooks", func() {
 			m.Get("", admin.DefaultOrSystemWebhooks)
 			m.Post("/delete", admin.DeleteDefaultOrSystemWebhook)
@@ -896,7 +902,7 @@ func registerWebRoutes(m *web.Router, webAuth *AuthMiddleware) {
 			addSettingsVariablesRoutes()
 			addSettingsScopedWorkflowsRoutes()
 		})
-	}, adminReq, ctxDataSet(reqctx.ContextData{"EnableOAuth2": setting.OAuth2.Enabled, "EnablePackages": setting.Packages.Enabled}))
+	}, adminReq, ctxDataSet(reqctx.ContextData{"EnableOAuth2": setting.OAuth2.Enabled, "EnablePackages": setting.Packages.Enabled, "EnableUpstreamProxy": setting.Packages.EnableUpstreamProxy}))
 	// ***** END: Admin *****
 
 	m.Group("", func() {

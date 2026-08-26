@@ -425,6 +425,10 @@ func prepareMigrationTasks() []*migration {
 		newMigration(349, "Add package registry upstream table", v28.AddPackageRegistryUpstream),
 		newMigration(350, "Add pinned_tags column to package registry upstream", v28.AddPinnedTagsToPackageRegistryUpstream),
 		newMigration(351, "Add priority column to package registry upstream", v28.AddPriorityToPackageRegistryUpstream),
+		// REBASE-COLLISION HOTSPOT: 349-352 are fork-local IDs and collide with upstream as soon as
+		// upstream claims them. On rebase, renumber these entries (and the matching v3xx.go files) to
+		// the next free IDs after the upstream tail.
+		newMigration(352, "Add target owner, remote prefix and admin-managed flag to package registry upstream", v28.AddTargetOwnerAndRemotePrefixToPackageRegistryUpstream),
 	}
 	return preparedMigrations
 }

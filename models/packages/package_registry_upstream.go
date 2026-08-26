@@ -76,6 +76,18 @@ type PackageRegistryUpstream struct {
 	Priority int64 `xorm:"NOT NULL DEFAULT 100"`
 	Enabled  bool  `xorm:"INDEX NOT NULL DEFAULT true"`
 
+	// TargetOwnerID is the owner/org under which packages fetched through this upstream are
+	// created and cached. It is the admin-facing name for the existing OwnerID scoping column and
+	// the invariant TargetOwnerID == OwnerID holds for every row (see normalizeTargetOwner), so
+	// the resolver, the (OwnerID, Type, Name) unique key and all existing queries stay unchanged.
+	TargetOwnerID int64 `xorm:"NOT NULL DEFAULT 0"`
+	// RemotePrefix is a namespace path segment prepended to the image when building the upstream
+	// request address (see UpstreamAddr). Empty means "request the image path unchanged".
+	RemotePrefix string `xorm:"NOT NULL DEFAULT ''"`
+	// IsAdminManaged records that this row was created/edited through the site admin panel.
+	// Provenance only - it has no effect on upstream resolution.
+	IsAdminManaged bool `xorm:"NOT NULL DEFAULT false"`
+
 	// Observability: FetchCount = upstream fetches, HitCount = served from local cache.
 	FetchCount int64 `xorm:"NOT NULL DEFAULT 0"`
 	HitCount   int64 `xorm:"NOT NULL DEFAULT 0"`
@@ -87,7 +99,29 @@ type PackageRegistryUpstream struct {
 	UpdatedUnix timeutil.TimeStamp `xorm:"updated NOT NULL DEFAULT 0"`
 }
 
+// normalizeTargetOwner keeps the invariant TargetOwnerID == OwnerID so the two can never diverge.
+// Callers may set either field: owner-scoped callers set OwnerID only, the admin panel selects a
+// Target_Owner; whichever is populated wins, with OwnerID taking precedence when both are set.
+func (u *PackageRegistryUpstream) normalizeTargetOwner() {
+	if u.OwnerID == 0 && u.TargetOwnerID != 0 {
+		u.OwnerID = u.TargetOwnerID
+		return
+	}
+	u.TargetOwnerID = u.OwnerID
+}
+
+// UpstreamAddr returns the address used when addressing image on the upstream registry: image
+// itself when no RemotePrefix is configured, otherwise the image below RemotePrefix. Pure helper -
+// used to compose the upstream /v2/<addr>/... URL and the matching Bearer scope.
+func (u *PackageRegistryUpstream) UpstreamAddr(image string) string {
+	if u.RemotePrefix == "" {
+		return image
+	}
+	return u.RemotePrefix + "/" + image
+}
+
 func InsertUpstream(ctx context.Context, u *PackageRegistryUpstream) (*PackageRegistryUpstream, error) {
+	u.normalizeTargetOwner()
 	return u, db.Insert(ctx, u)
 }
 
@@ -106,6 +140,15 @@ func GetUpstreamByID(ctx context.Context, id int64) (*PackageRegistryUpstream, e
 func GetUpstreamsByOwner(ctx context.Context, ownerID int64) ([]*PackageRegistryUpstream, error) {
 	ups := make([]*PackageRegistryUpstream, 0, 10)
 	return ups, db.GetEngine(ctx).Where("owner_id = ?", ownerID).OrderBy("id ASC").Find(&ups)
+}
+
+// GetAllUpstreams returns the upstreams of every owner, grouped by target owner and type and
+// ordered within a group by resolution priority - the listing order for the site admin view.
+// Ordering uses owner_id because it is the target owner column (TargetOwnerID == OwnerID), which
+// also keeps the order stable for rows written before the target_owner_id backfill.
+func GetAllUpstreams(ctx context.Context) ([]*PackageRegistryUpstream, error) {
+	ups := make([]*PackageRegistryUpstream, 0, 10)
+	return ups, db.GetEngine(ctx).OrderBy("owner_id ASC, type ASC, priority ASC, id ASC").Find(&ups)
 }
 
 // GetEnabledUpstreamByOwnerAndType returns the first enabled upstream for an (owner, type).
@@ -138,6 +181,7 @@ func GetEnabledUpstreamsByOwnerAndType(ctx context.Context, ownerID int64, packa
 }
 
 func UpdateUpstream(ctx context.Context, u *PackageRegistryUpstream) error {
+	u.normalizeTargetOwner()
 	_, err := db.GetEngine(ctx).ID(u.ID).AllCols().Update(u)
 	return err
 }

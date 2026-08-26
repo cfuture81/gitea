@@ -149,6 +149,8 @@ func serveMavenMetadata(ctx *context.Context, params parameters) {
 
 func servePackageFile(ctx *context.Context, params parameters, serveContent bool) {
 	// Group resolution: local (hosted) first, then each enabled upstream in priority order.
+	// This wrapper is a pure insert; upstream's original body now lives verbatim in
+	// servePackageFileLocal below (see FORK-MAINTENANCE.md rule 4: no reformatting).
 	ups := getEnabledMavenUpstreams(ctx)
 	var first *packages_model.PackageRegistryUpstream
 	if len(ups) > 0 {
@@ -156,7 +158,9 @@ func servePackageFile(ctx *context.Context, params parameters, serveContent bool
 	}
 
 	// Serve from local (cached) storage if present (hit attributed to the first group member).
-	if servePackageFileLocal(ctx, params, serveContent, first) {
+	missing := false
+	servePackageFileLocal(ctx, params, serveContent, first, &missing)
+	if !missing {
 		return
 	}
 
@@ -166,7 +170,12 @@ func servePackageFile(ctx *context.Context, params parameters, serveContent bool
 		if up.Mode != packages_model.UpstreamModePullThrough {
 			continue
 		}
-		if proxyFetchAndStore(ctx, params, up) && servePackageFileLocal(ctx, params, serveContent, nil) {
+		if !proxyFetchAndStore(ctx, params, up) {
+			continue
+		}
+		missing = false
+		servePackageFileLocal(ctx, params, serveContent, nil, &missing)
+		if !missing {
 			return
 		}
 	}
@@ -174,21 +183,31 @@ func servePackageFile(ctx *context.Context, params parameters, serveContent bool
 	apiError(ctx, http.StatusNotFound, packages_model.ErrPackageFileNotExist)
 }
 
-// servePackageFileLocal serves a file from local (cached) storage. It returns true when it has
-// written a response (served content/checksum, or a hard 5xx error), and false only when the
-// version or file does not exist locally (no response written) so the caller may proxy-fetch.
-// When up is non-nil and a file is actually served, the upstream hit counter is incremented.
-func servePackageFileLocal(ctx *context.Context, params parameters, serveContent bool, up *packages_model.PackageRegistryUpstream) bool {
+// servePackageFileLocal is upstream's servePackageFile, kept byte-identical apart from pure
+// inserts: two early-exit blocks and two hit-counter calls. Everything else — including every
+// bare `return` and both if/else error blocks — is upstream's code and must stay untouched so
+// rebases stay conflict-free.
+//
+// When missing is non-nil it is set to true (and no response is written) if the version or the
+// file does not exist locally, so the caller may proxy-fetch and retry. Passing a nil missing
+// reproduces upstream's behaviour exactly (404 written for those cases). When up is non-nil and
+// a file is actually served, the upstream hit counter is incremented.
+func servePackageFileLocal(ctx *context.Context, params parameters, serveContent bool, up *packages_model.PackageRegistryUpstream, missing *bool) {
 	pv, err := packages_model.GetVersionByNameAndVersion(ctx, ctx.Package.Owner.ID, packages_model.TypeMaven, params.toInternalPackageName(), params.Version)
 	if errors.Is(err, util.ErrNotExist) {
 		pv, err = packages_model.GetVersionByNameAndVersion(ctx, ctx.Package.Owner.ID, packages_model.TypeMaven, params.toInternalPackageNameLegacy(), params.Version)
 	}
+	if missing != nil && errors.Is(err, packages_model.ErrPackageNotExist) {
+		*missing = true
+		return
+	}
 	if err != nil {
 		if errors.Is(err, packages_model.ErrPackageNotExist) {
-			return false
+			apiError(ctx, http.StatusNotFound, err)
+		} else {
+			apiError(ctx, http.StatusInternalServerError, err)
 		}
-		apiError(ctx, http.StatusInternalServerError, err)
-		return true
+		return
 	}
 
 	filename := params.Filename
@@ -199,18 +218,23 @@ func servePackageFileLocal(ctx *context.Context, params parameters, serveContent
 	}
 
 	pf, err := packages_model.GetFileForVersionByName(ctx, pv.ID, filename, packages_model.EmptyFileKey)
+	if missing != nil && errors.Is(err, packages_model.ErrPackageFileNotExist) {
+		*missing = true
+		return
+	}
 	if err != nil {
 		if errors.Is(err, packages_model.ErrPackageFileNotExist) {
-			return false
+			apiError(ctx, http.StatusNotFound, err)
+		} else {
+			apiError(ctx, http.StatusInternalServerError, err)
 		}
-		apiError(ctx, http.StatusInternalServerError, err)
-		return true
+		return
 	}
 
 	pb, err := packages_model.GetBlobByID(ctx, pf.BlobID)
 	if err != nil {
 		apiError(ctx, http.StatusInternalServerError, err)
-		return true
+		return
 	}
 
 	if isChecksumExtension(ext) {
@@ -227,7 +251,7 @@ func servePackageFileLocal(ctx *context.Context, params parameters, serveContent
 		}
 		countUpstreamHit(ctx, up)
 		ctx.PlainText(http.StatusOK, hash)
-		return true
+		return
 	}
 
 	opts := context.ServeHeaderOptions{
@@ -244,20 +268,19 @@ func servePackageFileLocal(ctx *context.Context, params parameters, serveContent
 	if !serveContent {
 		ctx.SetServeHeaders(opts)
 		ctx.Status(http.StatusOK)
-		return true
+		return
 	}
 
 	s, u, _, err := packages_service.OpenBlobForDownload(ctx, pf, pb, ctx.Req.Method, nil)
 	if err != nil {
 		apiError(ctx, http.StatusInternalServerError, err)
-		return true
+		return
 	}
 
 	opts.Filename = pf.Name
 
 	countUpstreamHit(ctx, up)
 	helper.ServePackageFile(ctx, s, u, pf, opts)
-	return true
 }
 
 func mavenPkgNameKey(packageName string) string {

@@ -92,12 +92,27 @@ func DownloadPackageFile(ctx *context.Context) {
 	filename := ctx.PathParam("filename")
 
 	ups := getEnabledPyPIUpstreams(ctx)
-	info := &packages_service.PackageInfo{Owner: ctx.Package.Owner, PackageType: packages_model.TypePyPI, Name: packageName, Version: packageVersion}
-	finfo := &packages_service.PackageFileInfo{Filename: filename}
-
-	s, u, pf, err := packages_service.OpenFileForDownloadByPackageNameAndVersion(ctx, info, finfo, ctx.Req.Method)
 	proxied := false
+
+	s, u, pf, err := packages_service.OpenFileForDownloadByPackageNameAndVersion(
+		ctx,
+		&packages_service.PackageInfo{
+			Owner:       ctx.Package.Owner,
+			PackageType: packages_model.TypePyPI,
+			Name:        packageName,
+			Version:     packageVersion,
+		},
+		&packages_service.PackageFileInfo{
+			Filename: filename,
+		},
+		ctx.Req.Method,
+	)
+	// Local miss: try each pull_through upstream in order, then retry the local serve. The call
+	// above is upstream's, left untouched on purpose (FORK-MAINTENANCE.md rule 4); the retry
+	// rebuilds its arguments here rather than hoisting them out of it.
 	if errors.Is(err, packages_model.ErrPackageNotExist) || errors.Is(err, packages_model.ErrPackageFileNotExist) {
+		info := &packages_service.PackageInfo{Owner: ctx.Package.Owner, PackageType: packages_model.TypePyPI, Name: packageName, Version: packageVersion}
+		finfo := &packages_service.PackageFileInfo{Filename: filename}
 		upstreamURL := decodeUpstreamFileURL(ctx.FormString("u"))
 		for _, up := range ups {
 			if up.Mode != packages_model.UpstreamModePullThrough {
@@ -119,6 +134,7 @@ func DownloadPackageFile(ctx *context.Context) {
 		apiError(ctx, http.StatusInternalServerError, err)
 		return
 	}
+
 	if !proxied {
 		countPyPIHit(ctx, ups)
 	}
