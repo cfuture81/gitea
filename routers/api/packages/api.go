@@ -141,7 +141,7 @@ func CommonRoutes() *web.Router {
 
 	r.Group("/{username}", func() {
 		// Management API for pull-through / freeze proxy upstreams (feature-flagged).
-		// All endpoints require package write access (owner/admin) — config, not content.
+		// All endpoints require a site admin — config, not content; same audience as the panel.
 		r.Group("/-/upstreams", func() {
 			r.Get("", upstream.List)
 			r.Post("", upstream.Create)
@@ -150,7 +150,7 @@ func CommonRoutes() *web.Router {
 				r.Patch("", upstream.Update)
 				r.Delete("", upstream.Delete)
 			})
-		}, reqUpstreamProxyEnabled, reqPackageAccess(perm.AccessModeWrite))
+		}, reqUpstreamProxyEnabled, reqPackageAccess(perm.AccessModeWrite), reqSiteAdmin)
 		r.Group("/alpine", func() {
 			r.Get("/key", alpine.GetRepositoryKey)
 			r.Group("/{branch}/{repository}", func() {

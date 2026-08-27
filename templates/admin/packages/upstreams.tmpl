@@ -22,7 +22,6 @@
 						<th class="tw-text-center">{{ctx.Locale.Tr "enabled"}}</th>
 						<th class="tw-text-center" data-tooltip-content="{{ctx.Locale.Tr "admin.packages.upstreams.counters_desc"}}">{{ctx.Locale.Tr "admin.packages.upstreams.counters"}}</th>
 						<th>{{ctx.Locale.Tr "admin.packages.upstreams.pinned_tags"}}</th>
-						<th>{{ctx.Locale.Tr "admin.packages.upstreams.provenance"}}</th>
 						<th>{{ctx.Locale.Tr "admin.notices.op"}}</th>
 					</tr>
 				</thead>
@@ -50,7 +49,19 @@
 							<td><span class="ui basic label">{{.Type}}</span></td>
 							<td class="tw-font-semibold gt-ellipsis tw-max-w-48">{{.Name}}</td>
 							<td class="gt-ellipsis tw-max-w-48"><code>{{.URL}}</code></td>
-							<td>{{if .RemotePrefix}}<code>{{.RemotePrefix}}</code>{{else}}<span class="text grey">—</span>{{end}}</td>
+							{{/* The remote prefix is read only by the container proxy (UpstreamAddr); the
+							     maven/npm/pypi proxies never look at it. So for those types the column is
+							     inapplicable, which is a different statement from "empty" - hence "n/a"
+							     rather than the em dash used elsewhere for an unset value. */}}
+							<td>
+								{{if ne (printf "%s" .Type) "container"}}
+									<span class="text grey" data-tooltip-content="{{ctx.Locale.Tr "admin.packages.upstreams.remote_prefix_na_desc"}}">{{ctx.Locale.Tr "admin.packages.upstreams.remote_prefix_na"}}</span>
+								{{else if .RemotePrefix}}
+									<code>{{.RemotePrefix}}</code>
+								{{else}}
+									<span class="text grey">—</span>
+								{{end}}
+							</td>
 							<td>
 								{{if eq (printf "%s" .Mode) "frozen"}}
 									<span class="ui grey label">{{svg "octicon-lock" 12}} {{ctx.Locale.Tr "admin.packages.upstreams.mode.frozen"}}</span>
@@ -75,13 +86,6 @@
 									<span class="text grey">—</span>
 								{{end}}
 							</td>
-							<td>
-								{{if .IsAdminManaged}}
-									<span class="ui green label">{{svg "octicon-shield-check" 12}} {{ctx.Locale.Tr "admin.packages.upstreams.admin_managed"}}</span>
-								{{else}}
-									<span class="ui yellow label">{{svg "octicon-person" 12}} {{ctx.Locale.Tr "admin.packages.upstreams.owner_managed"}}</span>
-								{{end}}
-							</td>
 							<td class="right aligned tw-whitespace-nowrap">
 								<a class="ui tiny button" href="{{$.UpstreamsLink}}?id={{.ID}}#upstream-form">{{svg "octicon-pencil" 12}} {{ctx.Locale.Tr "edit"}}</a>
 								<a class="ui tiny red button show-modal" href data-modal="#admin-upstream-delete-modal"
@@ -92,7 +96,7 @@
 						</tr>
 					{{else}}
 						<tr>
-							<td class="tw-text-center" colspan="13">
+							<td class="tw-text-center" colspan="12">
 								<div class="empty-placeholder tw-py-4">
 									{{svg "octicon-package-dependencies" 36}}
 									<p>{{ctx.Locale.Tr "admin.packages.upstreams.none"}}</p>
@@ -149,7 +153,10 @@
 						<input name="name" value="{{if $e}}{{$e.Name}}{{end}}" placeholder="dockerhub" required>
 					</div>
 					<div class="field">
-						<label>{{ctx.Locale.Tr "admin.packages.upstreams.remote_prefix"}}</label>
+						<label>
+							{{ctx.Locale.Tr "admin.packages.upstreams.remote_prefix"}}
+							<span class="ui small label">{{ctx.Locale.Tr "admin.packages.upstreams.remote_prefix_container_only"}}</span>
+						</label>
 						<input name="remote_prefix" value="{{if $e}}{{$e.RemotePrefix}}{{end}}" placeholder="library">
 						<p class="help">{{ctx.Locale.Tr "admin.packages.upstreams.remote_prefix_desc"}}</p>
 					</div>

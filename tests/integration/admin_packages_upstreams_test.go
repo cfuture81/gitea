@@ -334,3 +334,130 @@ func TestAdminPackagesUpstreamsFlagOff(t *testing.T) {
 		})
 	})
 }
+
+// TestAdminPackagesUpstreamsAPISiteAdminOnly asserts that the per-owner upstream CRUD API at
+// /api/packages/{owner}/-/upstreams is restricted to site administrators, matching the admin-only
+// UI (Requirement 1.2; user decision Q1 = "admin permission level only").
+//
+// The gate that matters here is `reqSiteAdmin`, which sits after `reqPackageAccess(AccessModeWrite)`
+// on the route group. Package write access alone used to be sufficient, which meant any org member
+// on a team with Packages:write could read the upstream list (including `auth_username`) and
+// create, repoint or delete proxy configuration for their org — a hole under the admin-only UI.
+//
+// Fixture premise, and why it is asserted rather than assumed: `user5` is a member of team
+// `team20writepackage` in org `limited_org36`, whose team_unit grants Packages access_mode=write,
+// and `user5` is not a site admin (user1 is the only `is_admin: true` fixture user). If that
+// premise ever stops holding, the 403s below would pass for the wrong reason — `reqPackageAccess`
+// would be doing the denying, not `reqSiteAdmin`. The generic-package upload in
+// "PremiseNonAdminHasPackageWrite" is the positive control that pins it down: that route is gated
+// by `reqPackageAccess(perm.AccessModeWrite)` and nothing else, so its success proves user5 clears
+// package write on this owner.
+//
+// No router swap is needed (unlike the admin *web* tests in this file): the API group's feature
+// gate `reqUpstreamProxyEnabled` reads the setting per request, so mocking the variable is enough.
+func TestAdminPackagesUpstreamsAPISiteAdminOnly(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+	defer test.MockVariableValue(&setting.Packages.EnableUpstreamProxy, true)()
+
+	org := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 36})
+	admin := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 1})
+	member := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 5})
+	require.True(t, admin.IsAdmin, "user1 must be a site admin for this test to mean anything")
+	require.False(t, member.IsAdmin, "user5 must NOT be a site admin for this test to mean anything")
+
+	// an existing row so the {id} routes address something real rather than 404ing on lookup
+	up, err := packages_model.InsertUpstream(t.Context(), &packages_model.PackageRegistryUpstream{
+		OwnerID: org.ID, TargetOwnerID: org.ID, Type: packages_model.TypeContainer,
+		Name: "dockerhub", URL: "http://upstream.invalid",
+		Mode: packages_model.UpstreamModePullThrough, AuthType: packages_model.UpstreamAuthNone,
+		MetadataTTL: 900, Enabled: true, Priority: 100, IsAdminManaged: true,
+	})
+	require.NoError(t, err)
+
+	base := fmt.Sprintf("/api/packages/%s/-/upstreams", org.Name)
+	itemPath := fmt.Sprintf("%s/%d", base, up.ID)
+
+	t.Run("PremiseNonAdminHasPackageWrite", func(t *testing.T) {
+		defer tests.PrintCurrentTest(t)()
+		// Gated by reqPackageAccess(perm.AccessModeWrite) only -> proves the premise.
+		req := NewRequestWithBody(t, "PUT",
+			fmt.Sprintf("/api/packages/%s/generic/premise-probe/1.0.0/file.bin", org.Name),
+			bytes.NewReader([]byte{1, 2, 3})).AddBasicAuth(member.Name)
+		MakeRequest(t, req, http.StatusCreated)
+	})
+
+	t.Run("NonAdminWithPackageWriteDenied", func(t *testing.T) {
+		defer tests.PrintCurrentTest(t)()
+		for _, tc := range []struct {
+			name, method, path string
+			body               any
+		}{
+			{"List", "GET", base, nil},
+			{"Get", "GET", itemPath, nil},
+			{"Create", "POST", base, map[string]any{
+				"type": "container", "name": "evil", "url": "http://evil.invalid",
+			}},
+			{"Update", "PATCH", itemPath, map[string]any{"url": "http://evil.invalid"}},
+			{"Delete", "DELETE", itemPath, nil},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				var req *RequestWrapper
+				if tc.body == nil {
+					req = NewRequest(t, tc.method, tc.path)
+				} else {
+					req = NewRequestWithJSON(t, tc.method, tc.path, tc.body)
+				}
+				MakeRequest(t, req.AddBasicAuth(member.Name), http.StatusForbidden)
+			})
+		}
+	})
+
+	t.Run("DeniedRequestsPersistedNothing", func(t *testing.T) {
+		defer tests.PrintCurrentTest(t)()
+		all, err := packages_model.GetAllUpstreams(t.Context())
+		require.NoError(t, err)
+		require.Len(t, all, 1, "a denied request must not create or remove an upstream")
+		assert.Equal(t, up.ID, all[0].ID)
+		assert.Equal(t, "http://upstream.invalid", all[0].URL, "a denied PATCH must not repoint the upstream")
+	})
+
+	t.Run("AnonymousDenied", func(t *testing.T) {
+		defer tests.PrintCurrentTest(t)()
+		// reqPackageAccess answers first for an unauthenticated caller, with a challenge.
+		MakeRequest(t, NewRequest(t, "GET", base), http.StatusUnauthorized)
+	})
+
+	// Positive control: the very same URLs succeed for a site admin, so the 403s above are
+	// attributable to reqSiteAdmin and not to a mistyped path or a broken request body.
+	t.Run("SiteAdminAllowed", func(t *testing.T) {
+		defer tests.PrintCurrentTest(t)()
+
+		resp := MakeRequest(t, NewRequest(t, "GET", base).AddBasicAuth(admin.Name), http.StatusOK)
+		assert.Contains(t, resp.Body.String(), "dockerhub")
+
+		MakeRequest(t, NewRequest(t, "GET", itemPath).AddBasicAuth(admin.Name), http.StatusOK)
+
+		MakeRequest(t, NewRequestWithJSON(t, "PATCH", itemPath, map[string]any{
+			"url": "http://upstream-2.invalid",
+		}).AddBasicAuth(admin.Name), http.StatusOK)
+
+		created := MakeRequest(t, NewRequestWithJSON(t, "POST", base, map[string]any{
+			"type": "maven", "name": "central", "url": "http://central.invalid",
+		}).AddBasicAuth(admin.Name), http.StatusCreated)
+		var createdUp struct {
+			ID int64 `json:"id"`
+		}
+		DecodeJSON(t, created, &createdUp)
+		require.NotZero(t, createdUp.ID)
+
+		MakeRequest(t, NewRequest(t, "DELETE", fmt.Sprintf("%s/%d", base, createdUp.ID)).
+			AddBasicAuth(admin.Name), http.StatusNoContent)
+
+		// the admin PATCH did land, and the admin DELETE removed exactly the row it addressed
+		all, err := packages_model.GetAllUpstreams(t.Context())
+		require.NoError(t, err)
+		require.Len(t, all, 1)
+		assert.Equal(t, up.ID, all[0].ID)
+		assert.Equal(t, "http://upstream-2.invalid", all[0].URL)
+	})
+}
