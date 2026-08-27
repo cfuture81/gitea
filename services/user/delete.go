@@ -16,6 +16,7 @@ import (
 	git_model "gitea.dev/models/git"
 	issues_model "gitea.dev/models/issues"
 	"gitea.dev/models/organization"
+	packages_model "gitea.dev/models/packages"
 	access_model "gitea.dev/models/perm/access"
 	pull_model "gitea.dev/models/pull"
 	repo_model "gitea.dev/models/repo"
@@ -96,6 +97,7 @@ func deleteUser(ctx context.Context, u *user_model.User, purge bool) (err error)
 		&user_model.Blocking{BlockeeID: u.ID},
 		&actions_model.ActionRunnerToken{OwnerID: u.ID},
 		&actions_model.ActionScopedWorkflowSource{OwnerID: u.ID},
+		&packages_model.PackageRegistryUpstream{OwnerID: u.ID},
 		&auth_model.TwoFactor{UID: u.ID},
 		&auth_model.WebAuthnCredential{UserID: u.ID},
 		&activities_model.Notification{UserID: u.ID},
