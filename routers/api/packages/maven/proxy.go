@@ -4,6 +4,11 @@
 package maven
 
 import (
+	"crypto/md5"
+	"crypto/sha1"
+	"crypto/sha256"
+	"crypto/sha512"
+	"encoding/hex"
 	"errors"
 	"io"
 	"net/http"
@@ -24,6 +29,79 @@ import (
 )
 
 var proxyHTTPClient = &http.Client{Timeout: 60 * time.Second}
+
+const maxMavenMetadataBytes = 16 * 1024 * 1024
+
+// serveProxiedMavenMetadata serves version-less maven-metadata.xml from a pull_through upstream.
+// Gitea otherwise builds metadata only from LOCAL versions, so proxied *plugin-group* metadata
+// (e.g. org/apache/maven/plugins/maven-metadata.xml, used by Maven for plugin-prefix resolution)
+// has no local package and 404s. We fetch the upstream metadata and serve it: the .xml verbatim,
+// or the computed hash for the .md5/.sha1/.sha256/.sha512 sidecar (so the checksum matches the
+// exact bytes we serve). Returns true if it wrote a response. First-party/hosted paths (no
+// upstream match -> 404) return false so the caller falls through to the local generator.
+func serveProxiedMavenMetadata(ctx *context.Context, params parameters) bool {
+	ups := getEnabledMavenUpstreams(ctx)
+	if len(ups) == 0 {
+		return false
+	}
+	reqPath := ctx.PathParam("*")
+	ext := strings.ToLower(path.Ext(params.Filename))
+	basePath := reqPath
+	if isChecksumExtension(ext) {
+		basePath = strings.TrimSuffix(reqPath, ext)
+	}
+	for _, up := range ups {
+		if up.Mode != packages_model.UpstreamModePullThrough {
+			continue
+		}
+		remoteURL, ok := buildUpstreamURL(up.URL, basePath)
+		if !ok {
+			continue
+		}
+		negKey := strconv.FormatInt(up.ID, 10) + "|meta|" + basePath
+		if proxycache.Blocked(negKey) {
+			continue
+		}
+		body, status, ok := httpGetUpstream(ctx, up, remoteURL)
+		if !ok {
+			if proxycache.ShouldNegativeCache(status) {
+				proxycache.Block(negKey, proxycache.NegativeCacheTTL)
+			}
+			continue
+		}
+		data, err := io.ReadAll(io.LimitReader(body, maxMavenMetadataBytes))
+		body.Close()
+		if err != nil {
+			continue
+		}
+		countUpstreamHit(ctx, up)
+		if isChecksumExtension(ext) {
+			var hash string
+			switch ext {
+			case extensionMD5:
+				sum := md5.Sum(data)
+				hash = hex.EncodeToString(sum[:])
+			case extensionSHA1:
+				sum := sha1.Sum(data)
+				hash = hex.EncodeToString(sum[:])
+			case extensionSHA256:
+				sum := sha256.Sum256(data)
+				hash = hex.EncodeToString(sum[:])
+			case extensionSHA512:
+				sum := sha512.Sum512(data)
+				hash = hex.EncodeToString(sum[:])
+			}
+			ctx.PlainText(http.StatusOK, hash)
+			return true
+		}
+		ctx.Resp.Header().Set("Content-Type", contentTypeXML)
+		ctx.Resp.Header().Set("Content-Length", strconv.Itoa(len(data)))
+		ctx.Resp.WriteHeader(http.StatusOK)
+		_, _ = ctx.Resp.Write(data)
+		return true
+	}
+	return false
+}
 
 // getEnabledMavenUpstreams returns the owner's enabled maven upstreams in resolution order
 // (priority asc), or nil if the feature is off / none configured / lookup fails.

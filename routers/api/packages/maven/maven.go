@@ -78,6 +78,13 @@ func handlePackageFile(ctx *context.Context, serveContent bool) {
 }
 
 func serveMavenMetadata(ctx *context.Context, params parameters) {
+	// Pull-through upstreams can serve version-less metadata that has no local package —
+	// notably plugin-group metadata (…/maven-metadata.xml) needed for plugin-prefix resolution.
+	// Hosted/first-party paths 404 upstream and fall through to the local generator below.
+	if serveProxiedMavenMetadata(ctx, params) {
+		return
+	}
+
 	// path pattern: /com/foo/project/maven-metadata.xml[.md5/.sha1/.sha256/.sha512]
 	// in case there are legacy package names ("GroupID-ArtifactID") we need to check both, new packages always use ":" as separator("GroupID:ArtifactID")
 	pvsLegacy, err := packages_model.GetVersionsByPackageName(ctx, ctx.Package.Owner.ID, packages_model.TypeMaven, params.toInternalPackageNameLegacy())
