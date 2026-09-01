@@ -238,26 +238,97 @@ func buildUpstreamURL(base, reqPath string) (string, bool) {
 	return base + "/" + strings.TrimPrefix(reqPath, "/"), true
 }
 
+// maxUpstreamAttempts bounds retries for transient upstream failures (initial + retries).
+const maxUpstreamAttempts = 3
+
+// isTransientUpstreamStatus reports whether an upstream HTTP status is worth retrying
+// (rate-limit / transient server errors). 404/410/403/etc. are definitive and NOT retried.
+func isTransientUpstreamStatus(status int) bool {
+	switch status {
+	case http.StatusTooManyRequests,
+		http.StatusInternalServerError,
+		http.StatusBadGateway,
+		http.StatusServiceUnavailable,
+		http.StatusGatewayTimeout:
+		return true
+	}
+	return false
+}
+
+// parseRetryAfterSeconds parses a numeric (delta-seconds) Retry-After header. HTTP-date form and
+// invalid values are ignored (returns 0).
+func parseRetryAfterSeconds(v string) int {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0
+	}
+	if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+		return n
+	}
+	return 0
+}
+
+// upstreamBackoff computes the wait before the next attempt: exponential base (200ms,400ms,800ms)
+// raised to at least Retry-After when the upstream provided one, capped at 2s so a client request
+// never stalls for long.
+func upstreamBackoff(attempt, retryAfterSecs int) time.Duration {
+	d := time.Duration(200*(1<<attempt)) * time.Millisecond
+	if retryAfterSecs > 0 {
+		if ra := time.Duration(retryAfterSecs) * time.Second; ra > d {
+			d = ra
+		}
+	}
+	if d > 2*time.Second {
+		d = 2 * time.Second
+	}
+	return d
+}
+
+// httpGetUpstream performs the outbound GET with bounded retry+backoff on transient failures
+// (transport error / 429 / 5xx). On success returns the body (caller closes) with status 200.
+// On a definitive non-200 (e.g. 404/410) or after exhausting attempts it returns nil, the last
+// status (0 for a transport error), false. Retries are what make big parallel builds resilient to
+// momentary Central rate-limits/hiccups.
 func httpGetUpstream(ctx *context.Context, up *packages_model.PackageRegistryUpstream, url string) (io.ReadCloser, int, bool) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, 0, false
-	}
-	switch up.AuthType {
-	case packages_model.UpstreamAuthBasic:
-		req.SetBasicAuth(up.AuthUsername, up.AuthSecret)
-	case packages_model.UpstreamAuthToken:
-		req.Header.Set("Authorization", "Bearer "+up.AuthSecret)
-	}
-	resp, err := proxyHTTPClient.Do(req)
-	if err != nil {
-		log.Error("maven proxy: upstream request failed: %v", err)
-		return nil, 0, false
-	}
-	if resp.StatusCode != http.StatusOK {
-		code := resp.StatusCode
+	lastStatus := 0
+	var wait time.Duration
+	for attempt := 0; attempt < maxUpstreamAttempts; attempt++ {
+		if wait > 0 {
+			t := time.NewTimer(wait)
+			select {
+			case <-t.C:
+			case <-ctx.Done():
+				t.Stop()
+				return nil, lastStatus, false
+			}
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return nil, 0, false
+		}
+		switch up.AuthType {
+		case packages_model.UpstreamAuthBasic:
+			req.SetBasicAuth(up.AuthUsername, up.AuthSecret)
+		case packages_model.UpstreamAuthToken:
+			req.Header.Set("Authorization", "Bearer "+up.AuthSecret)
+		}
+		resp, err := proxyHTTPClient.Do(req)
+		if err != nil {
+			log.Error("maven proxy: upstream request failed (attempt %d/%d): %v", attempt+1, maxUpstreamAttempts, err)
+			lastStatus = 0
+			wait = upstreamBackoff(attempt, 0)
+			continue
+		}
+		if resp.StatusCode == http.StatusOK {
+			return resp.Body, resp.StatusCode, true
+		}
+		lastStatus = resp.StatusCode
+		retryAfter := parseRetryAfterSeconds(resp.Header.Get("Retry-After"))
 		_ = resp.Body.Close()
-		return nil, code, false
+		if !isTransientUpstreamStatus(lastStatus) {
+			return nil, lastStatus, false
+		}
+		wait = upstreamBackoff(attempt, retryAfter)
 	}
-	return resp.Body, resp.StatusCode, true
+	return nil, lastStatus, false
 }
