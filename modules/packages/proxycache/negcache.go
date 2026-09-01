@@ -7,6 +7,7 @@
 package proxycache
 
 import (
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -49,6 +50,20 @@ func Block(key string, ttl time.Duration) {
 			}
 		}
 	}
+}
+
+// NegativeCacheTTL is the lifetime of a definitive upstream "not found" negative-cache entry.
+// Kept short so a transient upstream miss never blocks a real artifact for long (Block also
+// applies a 60s floor).
+const NegativeCacheTTL = 60 * time.Second
+
+// ShouldNegativeCache reports whether an upstream HTTP status is a DEFINITIVE "not found"
+// (404/410) that may be briefly negatively cached. Transient failures — transport errors
+// (represented as status 0), timeouts, 5xx, 429, auth — MUST NOT be cached, so an upstream
+// blip never poisons a real artifact. Mirrors Nexus's split between the per-artifact
+// "not found" cache (404) and remote auto-block (transient/5xx).
+func ShouldNegativeCache(status int) bool {
+	return status == http.StatusNotFound || status == http.StatusGone
 }
 
 // Clear removes the negative-cache entry for key so the next lookup is no longer suppressed.

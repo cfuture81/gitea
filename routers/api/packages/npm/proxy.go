@@ -59,13 +59,13 @@ func npmUpstreamBase(up *packages_model.PackageRegistryUpstream) string {
 	return strings.TrimSuffix(strings.TrimSpace(up.URL), "/")
 }
 
-func httpGetNpm(ctx *context.Context, up *packages_model.PackageRegistryUpstream, url, accept string) (io.ReadCloser, bool) {
+func httpGetNpm(ctx *context.Context, up *packages_model.PackageRegistryUpstream, url, accept string) (io.ReadCloser, int, bool) {
 	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
-		return nil, false
+		return nil, 0, false
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, false
+		return nil, 0, false
 	}
 	if accept != "" {
 		req.Header.Set("Accept", accept)
@@ -79,20 +79,21 @@ func httpGetNpm(ctx *context.Context, up *packages_model.PackageRegistryUpstream
 	resp, err := npmProxyHTTPClient.Do(req)
 	if err != nil {
 		log.Error("npm proxy: upstream request failed: %v", err)
-		return nil, false
+		return nil, 0, false
 	}
 	if resp.StatusCode != http.StatusOK {
+		code := resp.StatusCode
 		_ = resp.Body.Close()
-		return nil, false
+		return nil, code, false
 	}
-	return resp.Body, true
+	return resp.Body, resp.StatusCode, true
 }
 
 // serveProxiedPackument fetches the upstream packument for pull_through, rewrites each version's
 // dist.tarball to this registry (so downloads flow through us and are cache/freeze-controlled),
 // and serves it. Returns true when it wrote a response.
 func serveProxiedPackument(ctx *context.Context, up *packages_model.PackageRegistryUpstream, name string) bool {
-	rc, ok := httpGetNpm(ctx, up, npmUpstreamBase(up)+"/"+name, "application/json")
+	rc, _, ok := httpGetNpm(ctx, up, npmUpstreamBase(up)+"/"+name, "application/json")
 	if !ok {
 		return false
 	}
@@ -141,9 +142,11 @@ func proxyFetchNpmTarball(ctx *context.Context, up *packages_model.PackageRegist
 	if proxycache.Blocked(negKey) {
 		return false
 	}
-	rc, ok := httpGetNpm(ctx, up, npmUpstreamBase(up)+"/"+name+"/-/"+filename, "")
+	rc, status, ok := httpGetNpm(ctx, up, npmUpstreamBase(up)+"/"+name+"/-/"+filename, "")
 	if !ok {
-		proxycache.Block(negKey, time.Duration(up.MetadataTTL)*time.Second)
+		if proxycache.ShouldNegativeCache(status) {
+			proxycache.Block(negKey, proxycache.NegativeCacheTTL)
+		}
 		return false
 	}
 	defer rc.Close()

@@ -4,6 +4,7 @@
 package proxycache
 
 import (
+	"net/http"
 	"testing"
 	"time"
 
@@ -92,6 +93,14 @@ func TestClearPrefixWithNoMatchIsNoOp(t *testing.T) {
 
 	assert.NotPanics(t, func() { ClearPrefix("9|library/other|") })
 	assert.True(t, Blocked(kept))
+}
+
+func TestShouldNegativeCache(t *testing.T) {
+	assert.True(t, ShouldNegativeCache(http.StatusNotFound))
+	assert.True(t, ShouldNegativeCache(http.StatusGone))
+	for _, s := range []int{0, 200, 301, 401, 403, 429, 500, 502, 503, 504} {
+		assert.False(t, ShouldNegativeCache(s), "status %d must not be negatively cached", s)
+	}
 }
 
 func TestBlockedSemanticsUnchanged(t *testing.T) {

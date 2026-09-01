@@ -90,9 +90,11 @@ func proxyFetchAndStore(ctx *context.Context, params parameters, up *packages_mo
 		log.Info("maven proxy: negative-cache short-circuit for %s (upstream %q)", reqPath, up.Name)
 		return false
 	}
-	body, ok := httpGetUpstream(ctx, up, remoteURL)
+	body, status, ok := httpGetUpstream(ctx, up, remoteURL)
 	if !ok {
-		proxycache.Block(negKey, time.Duration(up.MetadataTTL)*time.Second)
+		if proxycache.ShouldNegativeCache(status) {
+			proxycache.Block(negKey, proxycache.NegativeCacheTTL)
+		}
 		return false
 	}
 	defer body.Close()
@@ -158,10 +160,10 @@ func buildUpstreamURL(base, reqPath string) (string, bool) {
 	return base + "/" + strings.TrimPrefix(reqPath, "/"), true
 }
 
-func httpGetUpstream(ctx *context.Context, up *packages_model.PackageRegistryUpstream, url string) (io.ReadCloser, bool) {
+func httpGetUpstream(ctx *context.Context, up *packages_model.PackageRegistryUpstream, url string) (io.ReadCloser, int, bool) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, false
+		return nil, 0, false
 	}
 	switch up.AuthType {
 	case packages_model.UpstreamAuthBasic:
@@ -172,11 +174,12 @@ func httpGetUpstream(ctx *context.Context, up *packages_model.PackageRegistryUps
 	resp, err := proxyHTTPClient.Do(req)
 	if err != nil {
 		log.Error("maven proxy: upstream request failed: %v", err)
-		return nil, false
+		return nil, 0, false
 	}
 	if resp.StatusCode != http.StatusOK {
+		code := resp.StatusCode
 		_ = resp.Body.Close()
-		return nil, false
+		return nil, code, false
 	}
-	return resp.Body, true
+	return resp.Body, resp.StatusCode, true
 }

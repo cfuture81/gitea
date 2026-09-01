@@ -61,13 +61,13 @@ func pypiSimpleBase(up *packages_model.PackageRegistryUpstream) string {
 	return base
 }
 
-func httpGetPyPI(ctx *context.Context, up *packages_model.PackageRegistryUpstream, url, accept string) (io.ReadCloser, bool) {
+func httpGetPyPI(ctx *context.Context, up *packages_model.PackageRegistryUpstream, url, accept string) (io.ReadCloser, int, bool) {
 	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
-		return nil, false
+		return nil, 0, false
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, false
+		return nil, 0, false
 	}
 	if accept != "" {
 		req.Header.Set("Accept", accept)
@@ -81,13 +81,14 @@ func httpGetPyPI(ctx *context.Context, up *packages_model.PackageRegistryUpstrea
 	resp, err := pypiProxyHTTPClient.Do(req)
 	if err != nil {
 		log.Error("pypi proxy: upstream request failed: %v", err)
-		return nil, false
+		return nil, 0, false
 	}
 	if resp.StatusCode != http.StatusOK {
+		code := resp.StatusCode
 		_ = resp.Body.Close()
-		return nil, false
+		return nil, code, false
 	}
-	return resp.Body, true
+	return resp.Body, resp.StatusCode, true
 }
 
 // versionFromFilename extracts the version from a wheel/sdist filename.
@@ -115,7 +116,7 @@ func versionFromFilename(filename string) string {
 // file link to this registry's /pypi/files/… endpoint, carrying the real upstream file URL in a
 // url-safe base64 `u` query param (the #sha256 fragment is preserved for pip's hash check).
 func serveProxiedSimpleIndex(ctx *context.Context, up *packages_model.PackageRegistryUpstream, name string) bool {
-	rc, ok := httpGetPyPI(ctx, up, pypiSimpleBase(up)+"/"+name+"/", "text/html")
+	rc, _, ok := httpGetPyPI(ctx, up, pypiSimpleBase(up)+"/"+name+"/", "text/html")
 	if !ok {
 		return false
 	}
@@ -171,9 +172,11 @@ func proxyFetchPyPIFile(ctx *context.Context, up *packages_model.PackageRegistry
 	if proxycache.Blocked(negKey) {
 		return false
 	}
-	rc, ok := httpGetPyPI(ctx, up, upstreamURL, "")
+	rc, status, ok := httpGetPyPI(ctx, up, upstreamURL, "")
 	if !ok {
-		proxycache.Block(negKey, time.Duration(up.MetadataTTL)*time.Second)
+		if proxycache.ShouldNegativeCache(status) {
+			proxycache.Block(negKey, proxycache.NegativeCacheTTL)
+		}
 		return false
 	}
 	defer rc.Close()
