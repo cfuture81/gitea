@@ -69,6 +69,7 @@ func httpGetPyPI(ctx *context.Context, up *packages_model.PackageRegistryUpstrea
 	if err != nil {
 		return nil, 0, false
 	}
+	req.Header.Set("User-Agent", proxycache.UserAgent)
 	if accept != "" {
 		req.Header.Set("Accept", accept)
 	}

@@ -237,6 +237,7 @@ func (c *upstreamClient) get(ctx *context.Context, urlStr, accept, scope string)
 		if err != nil {
 			return nil, err
 		}
+		req.Header.Set("User-Agent", proxycache.UserAgent)
 		if accept != "" {
 			req.Header.Set("Accept", accept)
 		}
@@ -295,6 +296,7 @@ func (c *upstreamClient) fetchToken(ctx *context.Context, realm, service, scope 
 	if err != nil {
 		return "", err
 	}
+	req.Header.Set("User-Agent", proxycache.UserAgent)
 	if c.up.AuthType == packages_model.UpstreamAuthBasic && c.up.AuthUsername != "" {
 		req.SetBasicAuth(c.up.AuthUsername, c.up.AuthSecret)
 	}

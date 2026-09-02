@@ -306,6 +306,7 @@ func httpGetUpstream(ctx *context.Context, up *packages_model.PackageRegistryUps
 		if err != nil {
 			return nil, 0, false
 		}
+		req.Header.Set("User-Agent", proxycache.UserAgent)
 		switch up.AuthType {
 		case packages_model.UpstreamAuthBasic:
 			req.SetBasicAuth(up.AuthUsername, up.AuthSecret)

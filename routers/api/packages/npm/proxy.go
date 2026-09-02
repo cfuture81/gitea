@@ -67,6 +67,7 @@ func httpGetNpm(ctx *context.Context, up *packages_model.PackageRegistryUpstream
 	if err != nil {
 		return nil, 0, false
 	}
+	req.Header.Set("User-Agent", proxycache.UserAgent)
 	if accept != "" {
 		req.Header.Set("Accept", accept)
 	}

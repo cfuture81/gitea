@@ -18,6 +18,11 @@ var (
 	blocked = map[string]time.Time{}
 )
 
+// UserAgent is sent on all outbound package-proxy upstream requests. Some upstreams (notably
+// Maven Central / Fastly) throttle the default Go client UA ("Go-http-client/*") with HTTP 429,
+// so a descriptive UA is required.
+const UserAgent = "Gitea-Package-Proxy/1.0"
+
 // Blocked reports whether key is currently negatively cached (a recent upstream miss).
 func Blocked(key string) bool {
 	mu.Lock()
